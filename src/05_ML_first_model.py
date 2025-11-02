@@ -8,7 +8,7 @@ Salida:
 - modelos guardados en models/
 
 Uso:
- src/05_ML_first_model.py --input_csv datapython/final/All_features.csv --target_col Clase --group_col Sujeto --cv stratified --n_splits 5
+python src/05_ML_first_model.py --input_csv datapython/final/All_features.csv --target_col Clase --group_col Sujeto --cv stratified --n_splits 5
 """
 import argparse
 from pathlib import Path
