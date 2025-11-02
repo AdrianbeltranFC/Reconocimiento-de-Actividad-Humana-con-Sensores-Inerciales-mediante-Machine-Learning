@@ -2,10 +2,8 @@
 """
 plot_validation.py
 Comparar señales raw vs processed y visualizar ventanas. Guarda figuras en reports/validation/.
-Uso:
-python src/validation/plot_validation.py --raw data/raw/S14_Caminar_2.csv --processed data/processed/S14/Caminar/S14_Caminar_2_pipeline.csv --fs 100
-o para carpetas:
-python src/validation/plot_validation.py --raw_dir data/raw --processed_dir data/processed --n_examples 3
+Uso para carpetas:
+python -u src/04_workflow_validation.py --raw_dir data/raw --processed_dir data/processed --n_examples 5 --fs 100
 """
 import os
 import argparse

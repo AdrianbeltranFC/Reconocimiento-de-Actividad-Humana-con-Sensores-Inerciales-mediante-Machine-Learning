@@ -1,0 +1,13 @@
+# Dependencias principales de procesamiento
+pandas
+numpy
+scipy
+tqdm
+
+# Dependencias de Machine Learning y Validación
+scikit-learn
+joblib
+
+# Dependencias de Gráficas
+matplotlib
+seaborn

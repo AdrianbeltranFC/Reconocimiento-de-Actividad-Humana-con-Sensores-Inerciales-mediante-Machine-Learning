@@ -14,7 +14,7 @@ build/
 # data/raw/  
 data/processed/
 data/features/
-*.csv
+# *.csv  dejarlo comentado para poder subir los datos crudos, si ya los tienes en tu carpeta local puedes descomentar esta línea para ignorar todos los CSVs
 
 # IDEs
 .vscode/
