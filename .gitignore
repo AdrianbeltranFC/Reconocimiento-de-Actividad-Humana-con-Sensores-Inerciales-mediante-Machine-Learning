@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Datos (para no subir los CSVs pesados a GitHub)
+data/raw/
+data/processed/
+data/features/
+*.csv
+
+# IDEs
+.vscode/
+.idea/venv/
+.vscode/
+pycache/
+data/processed/
+reports/
+dataset_final.csv
