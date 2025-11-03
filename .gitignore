@@ -6,28 +6,24 @@ __pycache__/
 .venv/
 venv/
 env/
-*.egg-info/
-dist/
-build/
 
-# Datos: ignorar carpetas de trabajo pero permitir data/final (CSV finales)
+# Directorios de trabajo
 data/processed/
 data/features/
-# permitir la carpeta final y ciertos CSVs
+# data/raw/
+
+# Solo permitir CSVs finales específicos
 !data/final/
 !data/final/All_features.csv
 !data/final/All_features_orange_top8.csv
 
-# Reports: permitir imágenes y CSVs de reportes finales
-# comentar/eliminar la línea que ignora todo reports/
-# reports/
-!reports/
+# Reports: solo permitir reports finales
+reports/*
 !reports/final_models/
-!reports/selection/
+reports/final_models/*
+!reports/final_models/Métricas*
+!reports/final_models/Comparación_baseline_vs_8_caracteristicas.csv
 
 # IDEs
 .vscode/
-.idea/venv/
-.vscode/
-pycache/
-dataset_final.csv
+.idea/
