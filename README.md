@@ -1,7 +1,4 @@
-# Proyecto AVD_project — Clasificación de actividades (IMU)
-
-Última actualización: 2025-11-02
-
+# Reconocimiento de Actividad Humana con Sensores Inerciales mediante Machine Learning
 ---
 
 ## Resumen
@@ -9,12 +6,12 @@ Proyecto para clasificación de actividades usando features extraídas de señal
 - Preprocesamiento y extracción de features
 - Selección automática de features
 - Entrenamiento y evaluación de modelos (SVM-RBF y k-NN)
-- Comparación entre modelo con todas las features (baseline) y con 8 features seleccionadas (Orange top‑8)
+- Comparación entre modelo con todas las features y con 8 features seleccionadas por relevancia (Orange top‑8)
 - Guardado de datasets reducidos, reportes, figuras y modelos finales
 
 ---
 
-## Contenido (README muy completo)
+## Contenido (README)
 1. [Estructura del repositorio](#estructura-del-repositorio)  
 2. [Requisitos e instalación](#requisitos-e-instalación)  
 3. [Orden de ejecución de scripts y ejemplos](#orden-de-ejecución-de-scripts-y-ejemplos)  
@@ -104,7 +101,7 @@ python src/01_preprocessing.py --input_raw data/raw --processed_dir data/process
 python src/02_feature_extraction.py --processed_dir data/processed --features_dir data/features --final_dir data/final
 ```
 
-3. Selección de features (03 / 06 según tu versión)
+3. Selección de features (03)
 ```powershell
 python src/06_feature_selection.py --input_csv "data/final/All_features.csv"
 ```
@@ -166,9 +163,9 @@ Salida: matrices de confusión, classification reports, modelos finales en `mode
 - reports/final_comparison.csv  
   Tabla comparativa (metrics) entre baseline (todas las features) y Orange top‑8.
 
-Ejemplo de tabla generada (tu resultado):
+Resultados:
 ```
-=== COMPARACIÓN (BASELINE vs ORANGE-TOP8) ===
+=== COMPARACIÓN (Todas las características vs ORANGE-TOP8) ===
   model  before_acc_mean  before_acc_std  before_f1_mean  after_acc_mean  after_acc_std  after_f1_mean
 SVM_RBF         0.984661        0.010454        0.984361        0.960455       0.012722       0.958876
  kNN_k5         0.980527        0.008864        0.980097        0.968122       0.008219       0.966723
@@ -190,7 +187,7 @@ SVM_RBF         0.984661        0.010454        0.984361        0.960455       0
   - models/KNN_k5_full.joblib
   - models/KNN_k5_reduced.joblib
 
-Nota: Los modelos nuevos se guardan con sufijos `_full` o `_reduced`. No se sobrescriben los anteriores si el script usa sufijos diferentes o timestamp; revisa las líneas de guardado en `src/07_finalize_models_and_reports.py` para confirmar el patrón exacto.
+Nota: Los modelos nuevos se guardan con sufijos `_full` o `_reduced`. 
 
 ---
 
@@ -200,10 +197,10 @@ Nota: Los modelos nuevos se guardan con sufijos `_full` o `_reduced`. No se sobr
 - f1 (F1-score): media armónica entre precisión y recall por clase, útil cuando hay desbalance.
 - std: desviación estándar entre folds — indica estabilidad del modelo entre particiones.
 
-Observación sobre tus resultados:
+Observación sobre los resultados:
 - La caída de accuracy ~2% al reducir de ~98.4% a ~96.0% indica que las 8 features conservan la mayor parte de la información discriminativa.
 - k-NN se mantiene competitivo con SVM en la versión reducida; varianza baja implica resultados estables.
-- Confusion matrices muestran en qué clases ocurren errores — revísalas para ver patrones (p. ej. confusión entre actividades parcialmente similares).
+- Las matrices de confusión muestran en qué clases ocurren errores.
 
 ---
 
@@ -211,7 +208,7 @@ Observación sobre tus resultados:
 
 Imágenes generadas por los scripts se guardan en `reports/`:
 
-- Comparación de métricas (tabla): `reports/final_comparison.csv` (puedes convertirla a PNG con Excel o matplotlib)
+- Comparación de métricas (tabla): `reports/final_comparison.csv`
 - Matrices de confusión:
   - `reports/final_models/confusion_SVM_full.png`
   - `reports/final_models/confusion_SVM_reduced.png`
@@ -260,16 +257,7 @@ y_pred = m.predict(X_new)
   - Eliminar filas con NaN antes de entrenar, o
   - Usar estimadores que acepten NaN (HistGradientBoosting).
 
----
-
-## Recursos extra y próximos pasos sugeridos
-- Probar más clasificadores (RandomForest, XGBoost, LightGBM)
-- Realizar búsqueda de hiperparámetros (GridSearchCV / RandomizedSearchCV)
-- Añadir análisis de importancia de features (SHAP)
-- Empaquetar pipeline final (scikit-learn Pipeline + ColumnTransformer) y publicar como un pip package o script CLI
-
----
-
+---  
 ## Imágenes (incrustadas si están presentes)
 Si las imágenes están en `reports/final_models/` y `reports/selection/`, aparecerán así en Markdown:
 
