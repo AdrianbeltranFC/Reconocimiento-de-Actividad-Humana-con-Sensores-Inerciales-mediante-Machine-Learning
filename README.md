@@ -81,7 +81,7 @@ python src/07_finalize_models_and_reports.py --input_csv data/final/All_features
 
 ## 📊 Resultados
 
-### Comparación de Modelos
+### Comparación de Accuracy entre modelos 
 | Modelo  | Con todas las features | Con 8 features |
 |---------|----------------------|----------------|
 | SVM-RBF | 98.47% ±1.05%       | 96.05% ±1.27% |
