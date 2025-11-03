@@ -10,17 +10,24 @@ env/
 dist/
 build/
 
-# Datos (para no subir los CSVs pesados a GitHub)
-# data/raw/  
+# Datos: ignorar carpetas de trabajo pero permitir data/final (CSV finales)
 data/processed/
 data/features/
-# *.csv  dejarlo comentado para poder subir los datos crudos, si ya los tienes en tu carpeta local puedes descomentar esta línea para ignorar todos los CSVs
+# permitir la carpeta final y ciertos CSVs
+!data/final/
+!data/final/All_features.csv
+!data/final/All_features_orange_top8.csv
+
+# Reports: permitir imágenes y CSVs de reportes finales
+# comentar/eliminar la línea que ignora todo reports/
+# reports/
+!reports/
+!reports/final_models/
+!reports/selection/
 
 # IDEs
 .vscode/
 .idea/venv/
 .vscode/
 pycache/
-data/processed/
-reports/
 dataset_final.csv
