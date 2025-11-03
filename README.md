@@ -23,32 +23,33 @@ Este proyecto implementa un sistema de reconocimiento de actividad humana (HAR) 
 El flujo completo del sistema abarca desde el preprocesamiento y segmentación de datos crudos, hasta la extracción y selección automática de características, seguido del entrenamiento y evaluación de modelos de aprendizaje automático (SVM-RBF y k-NN).
 
 Asimismo, se incluye una comparación de desempeño entre modelos entrenados con todas las características y aquellos optimizados con las 8 variables más relevantes según el método de selección Orange (top-8 features), demostrando que la reducción de dimensionalidad mantiene una alta precisión con menor complejidad computacional.
-## Estructura del Proyecto
-```
-AVD_project/
-├── data/
-│   └── final/
-│       ├── All_features.csv              # Dataset completo
-│       └── All_features_orange_top8.csv  # Dataset reducido (8 features)
-├── models/
-│   ├── SVM_todas_caracteristicas.joblib
-│   └── kNN_8_caracteristicas.joblib
-├── reports/
-│   └── final_models/
-│       ├── Métricas para SVM con todas las características.png
-│       ├── Métricas para SVM con 8 características.png
-│       ├── Métricas para k-NN con todas las características.png
-│       ├── Métricas para k-NN con 8 características.png
-│       └── Comparación_baseline_vs_8_caracteristicas.csv
-└── src/
-    ├── 01_preprocessing.py
-    ├── 02_feature_extraction.py
-    ├── 03_feature_selection.py
-    ├── 04_ML_first_model.py
-    ├── 05_ML_using_top8_orange.py
-    ├── 06_feature_selection.py
-    └── 07_finalize_models_and_reports.py
-```
+
+## Organización del repositorio y descripción de las carpetas principales:
+
+- `/data/`: Contiene los conjuntos de datos generados en las diferentes etapas del flujo de trabajo.
+    -`/final/`: Archivos CSV utilizados para el entrenamiento y evaluación de los modelos.
+        All_features.csv: Dataset completo con todas las características extraídas.
+        All_features_orange_top8.csv: Dataset reducido con las 8 características seleccionadas por relevancia.
+
+- `/models/`: Modelos de aprendizaje automático entrenados.
+    - `SVM_todas_caracteristicas.joblib`: Modelo SVM con todas las características.
+    - `kNN_8_caracteristicas.joblib`: Modelo k-NN entrenado con las 8 características seleccionadas.
+
+- `/reports` Contiene los reportes visuales y métricas finales de desempeño.
+    - `/final_models/`: Incluye comparaciones de precisión, matrices de confusión y resultados de ambos modelos.
+
+- `/src/`: Scripts principales que implementan el flujo completo del sistema: desde la adquisición y preprocesamiento de datos, hasta la generación de reportes y modelos finales.
+    - `01_preprocessing.py`: Limpieza y segmentación de señales IMU.
+
+    - `02_feature_extraction.py`: Extracción de características estadísticas.
+
+    - `03_feature_selection.py`: Selección automática de características mediante Orange.
+
+    - `04_ML_first_model.py`: Entrenamiento inicial con todas las características.
+
+    - `05_ML_using_top8_orange.py`: Entrenamiento con el conjunto reducido (8 features).
+
+    - `07_finalize_models_and_reports.py`: Cálculo de métricas, generación de reportes y guardado de modelos finale
 
 ##  Instalación
 
