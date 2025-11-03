@@ -102,7 +102,7 @@ Las matrices de confusión se encuentran en:
 - `reports/final_models/Métricas para SVM con 8 características.png`
 - `reports/final_models/Métricas para k-NN con todas las características.png`
 - `reports/final_models/Métricas para k-NN con 8 características.png`
-
+![Ejemplo: Metricas para SVM con 8 caracteristicas](reports/final_models/Métricas para SVM con 8 características.png)
 ### 8 Características Seleccionadas
 1. Acceleration X(g)_mean
 2. Acceleration X(g)_std
