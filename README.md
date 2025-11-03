@@ -18,9 +18,12 @@ Proyecto para clasificación de actividades usando features extraídas de señal
 5. [Resultados](#resultados)
 
 ##  Descripción
-Sistema de clasificación de actividades usando datos de sensores IMU. Implementa modelos SVM-RBF y k-NN, con selección de características para reducir dimensionalidad manteniendo alto rendimiento.
+Este proyecto implementa un sistema de reconocimiento de actividad humana (HAR) basado en datos provenientes de sensores inerciales (Inertial Measurement Units, IMU). El objetivo es clasificar actividades como caminar, correr y permanecer quieto mediante el análisis de características estadísticas extraídas de señales de aceleración y velocidad angular.
 
-## 📁 Estructura del Proyecto
+El flujo completo del sistema abarca desde el preprocesamiento y segmentación de datos crudos, hasta la extracción y selección automática de características, seguido del entrenamiento y evaluación de modelos de aprendizaje automático (SVM-RBF y k-NN).
+
+Asimismo, se incluye una comparación de desempeño entre modelos entrenados con todas las características y aquellos optimizados con las 8 variables más relevantes según el método de selección Orange (top-8 features), demostrando que la reducción de dimensionalidad mantiene una alta precisión con menor complejidad computacional.
+## Estructura del Proyecto
 ```
 AVD_project/
 ├── data/
