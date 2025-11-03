@@ -257,16 +257,4 @@ y_pred = m.predict(X_new)
   - Eliminar filas con NaN antes de entrenar, o
   - Usar estimadores que acepten NaN (HistGradientBoosting).
 
----  
-## Imágenes (incrustadas si están presentes)
-Si las imágenes están en `reports/final_models/` y `reports/selection/`, aparecerán así en Markdown:
-
-![Confusión SVM - Full](reports/final_models/confusion_SVM_full.png)
-![Confusión SVM - Reduced](reports/final_models/confusion_SVM_reduced.png)
-
-![Confusión KNN - Full](reports/final_models/confusion_KNN_full.png)
-![Confusión KNN - Reduced](reports/final_models/confusion_KNN_reduced.png)
-
-![Ranking de features](reports/selection/features_ranking_final.png)
-
----
+--- 
