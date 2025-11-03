@@ -37,7 +37,7 @@ Asimismo, se incluye una comparación de desempeño entre modelos entrenados con
     - `SVM_todas_caracteristicas.joblib`: Modelo SVM con todas las características.
     - `kNN_8_caracteristicas.joblib`: Modelo k-NN entrenado con las 8 características seleccionadas.
 
-- `/reports` Contiene los reportes visuales y métricas finales de desempeño.
+- `/reports`: Contiene los reportes visuales y métricas finales de desempeño.
     - `/final_models/`: Incluye comparaciones de precisión, matrices de confusión y resultados de ambos modelos.
 
 - `/src/`: Scripts principales que implementan el flujo completo del sistema: desde la adquisición y preprocesamiento de datos, hasta la generación de reportes y modelos finales.
@@ -52,6 +52,9 @@ Asimismo, se incluye una comparación de desempeño entre modelos entrenados con
     - `05_ML_using_top8_orange.py`: Entrenamiento con el conjunto reducido (8 features).
 
     - `07_finalize_models_and_reports.py`: Cálculo de métricas, generación de reportes y guardado de modelos finale
+ 
+- `/Caracteristicas/`
+    -  `Mejores_Caracteristicas`: Pdf extraido de Orange Data Mining de todas las caracteristicas ordenadas dependiendo su rendimiento de clasificación en base a varios métodos de puntuación.
 
 ##  Instalación
 
