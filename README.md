@@ -16,6 +16,8 @@ Proyecto para clasificación de actividades usando features extraídas de señal
 3. [Instalación](#Instalación)
 4. [Ejecución de Scripts](#Ejecución-de-scripts)
 5. [Resultados](#Resultados)
+6. [Interpretación](#Interpretación)
+7. [Notas](#Notas)
 
 ##  Descripción
 Este proyecto implementa un sistema de reconocimiento de actividad humana (HAR) basado en datos provenientes de sensores inerciales (Inertial Measurement Units, IMU). El objetivo es clasificar actividades como caminar, correr y permanecer quieto mediante el análisis de características estadísticas extraídas de señales de aceleración y velocidad angular.
@@ -90,6 +92,16 @@ python src/07_finalize_models_and_reports.py --input_csv data/final/All_features
 
 ## Resultados
 
+### 8 Características Seleccionadas
+1. Acceleration X(g)_mean
+2. Acceleration X(g)_std
+3. Acceleration X(g)_var
+4. Acceleration X(g)_median
+5. Acceleration X(g)_iqr
+6. Acceleration X(g)_rms
+7. Acceleration X(g)_ptp
+8. Acceleration X(g)_sma
+
 ### Comparación de Accuracy entre modelos 
 | Modelo  | Con todas las features | Con 8 features |
 |---------|----------------------|----------------|
@@ -102,25 +114,15 @@ Las matrices de confusión se encuentran en:
 - `reports/final_models/Métricas para SVM con 8 características.png`
 - `reports/final_models/Métricas para k-NN con todas las características.png`
 - `reports/final_models/Métricas para k-NN con 8 características.png`
-- 
+
+### Ejemplo:
 ![Ejemplo: Métricas para SVM con 8 características](reports/final_models/M%C3%A9tricas%20para%20SVM%20con%208%20caracter%C3%ADsticas.png)
 
 
-
-### 8 Características Seleccionadas
-1. Acceleration X(g)_mean
-2. Acceleration X(g)_std
-3. Acceleration X(g)_var
-4. Acceleration X(g)_median
-5. Acceleration X(g)_iqr
-6. Acceleration X(g)_rms
-7. Acceleration X(g)_ptp
-8. Acceleration X(g)_sma
-
 ##  Interpretación
-- La reducción a 8 características mantiene un rendimiento muy parecido al de considerar todas.  (~96% acc)
-- k-NN muestra menor varianza en sus predicciones con features reducidas
-- Las matrices de confusión muestran patrones de error específicos por actividad
+La reducción a ocho características mantiene un rendimiento cercano al 96 %, lo que evidencia que la selección automática de features puede preservar la capacidad predictiva con un modelo más ligero.
+El modelo k-NN muestra menor varianza entre iteraciones al usar el conjunto reducido, mientras que SVM-RBF conserva la mayor precisión general.
+Las matrices de confusión permiten identificar patrones específicos de error por clase, mostrando una alta consistencia en la clasificación de caminar y correr, con ligeras confusiones en las transiciones hacia el estado de quieto.
 
 ##  Notas
-- Las métricas completas están disponibles en los CSVs de reporte (reports)
+- Los reportes completos (CSV y figuras) se encuentran en `reports/final_models/`.
