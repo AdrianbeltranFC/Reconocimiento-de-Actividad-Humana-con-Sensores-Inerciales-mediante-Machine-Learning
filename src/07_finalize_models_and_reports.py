@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-08_finalize_models_and_reports.py
+07_finalize_models_and_reports.py
 
-- Re-evalúa baseline vs Orange-top8 (StratifiedKFold por defecto)
-- Guarda matrices de confusión y classification reports (CSV + PNG) en español
-- Entrena modelos finales (SVM_RBF y kNN) sobre la matriz reducida y los guarda en models/
-- Guarda tabla comparativa con métricas en reports/final_models/final_comparison_detailed.csv
+Genera:
+- PNG (matrices de confusión) con títulos en español (por ejemplo:
+  "Métricas para SVM con todas las características",
+  "Métricas para SVM con 8 características").
+- CSV: matriz de confusión y classification report (para reporte).
+- Modelos finales serializados con nombres claros:
+  SVM_todas_caracteristicas.joblib
+  SVM_8_caracteristicas.joblib
+- Un CSV resumen comparativo.
 
-Uso:
-python src/07_finalize_models_and_reports.py --input_csv data/final/All_features.csv --reduced_csv data/final/All_features_orange_top8.csv --cv stratified --n_splits 5 --save_models --verbose
+Uso ejemplo:
+python src/07_finalize_models_and_reports.py --input_csv data/final/All_features.csv --reduced_csv data/final/All_features_orange_top8.csv --n_splits 5 --save_models --verbose
 """
 import argparse
 from pathlib import Path
@@ -21,6 +26,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import joblib
 import time
+import re
 import os
 
 from sklearn.pipeline import Pipeline
@@ -41,11 +47,22 @@ def printv(msg, verbose):
     if verbose:
         print(msg)
 
+def sanitize_filename(s: str) -> str:
+    """
+    Devuelve una versión segura para filename.
+    Mantiene espacios y caracteres legibles, pero elimina los
+    caracteres que causan problemas en Windows/Unix.
+    """
+    # quitar / \ : * ? " < > | y controlar dobles espacios
+    s2 = re.sub(r'[\/\\\:\*\?\"\<\>\|]', '_', s)
+    s2 = re.sub(r'\s+', ' ', s2).strip()
+    return s2
+
 # ---------------------------
-# Funciones de plotting (español)
+# Plot + CSV helpers (en español)
 # ---------------------------
-def plot_confusion_matrix(cm, labels, out_png: Path, title="Matriz de confusión"):
-    """Guarda matriz de confusión como imagen (con anotaciones)."""
+def plot_confusion_matrix_and_save(cm, labels, out_png: Path, title: str):
+    """Guarda matriz de confusión como imagen con título en español."""
     ensure_dir(out_png.parent)
     plt.figure(figsize=(6,5))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=labels, yticklabels=labels)
@@ -56,52 +73,60 @@ def plot_confusion_matrix(cm, labels, out_png: Path, title="Matriz de confusión
     plt.savefig(out_png)
     plt.close()
 
-def save_classification_report(y_true, y_pred, labels, out_csv: Path):
-    """Genera classification report (precision/recall/f1) y lo guarda como CSV."""
+def save_confusion_csv(cm, labels, out_csv: Path):
+    ensure_dir(out_csv.parent)
+    pd.DataFrame(cm, index=labels, columns=labels).to_csv(out_csv)
+
+def save_classification_report_csv(y_true, y_pred, labels, out_csv: Path):
+    ensure_dir(out_csv.parent)
     cr = classification_report(y_true, y_pred, target_names=labels, output_dict=True, zero_division=0)
     df_cr = pd.DataFrame(cr).T
     df_cr.to_csv(out_csv)
     return df_cr
 
 # ---------------------------
-# Evaluación por CV (predicciones agregadas)
+# CV predict and save (con nombres y títulos en español)
 # ---------------------------
-def cv_predict_and_report(X, y, pipeline, cv, labels, out_prefix: Path, verbose=False):
+def cv_predict_and_save(X, y, pipeline, cv, labels, out_dir: Path, display_title: str, filename_base: str, verbose=False):
     """
-    Ejecuta cross_val_predict para obtener predicciones agregadas (por CV),
-    calcula matriz de confusión, classification report y guarda todo.
+    Ejecuta cross_val_predict, guarda:
+      - PNG con título = display_title
+      - CSV: filename_base + "_confusion_matrix.csv"
+      - CSV: filename_base + "_classification_report.csv"
+    filename_base se sanea internamente.
     """
-    # obtén predicciones por CV (respetando imputación dentro de pipeline)
+    ensure_dir(out_dir)
+    # predecir por CV
     y_pred = cross_val_predict(pipeline, X, y, cv=cv, method='predict', n_jobs=-1)
-    # métricas generales
+    # métricas
     acc = accuracy_score(y, y_pred)
     prec, rec, f1, _ = precision_recall_fscore_support(y, y_pred, average='macro', zero_division=0)
-    # confusion matrix
     cm = confusion_matrix(y, y_pred, labels=labels)
-    # guardar cm imagen
-    plot_confusion_matrix(cm, labels, out_prefix.with_suffix('.png'), title=out_prefix.name)
-    # classification report CSV
-    cr_df = save_classification_report(y, y_pred, labels, out_prefix.with_suffix('.csv'))
+
+    safe_base = sanitize_filename(filename_base)
+    png_path = out_dir / f"{safe_base}.png"
+    csv_cm_path = out_dir / f"{safe_base}_confusion_matrix.csv"
+    csv_cr_path = out_dir / f"{safe_base}_classification_report.csv"
+
+    # guardar PNG con título en español
+    plot_confusion_matrix_and_save(cm, labels, png_path, display_title)
+    # guardar CSVs
+    save_confusion_csv(cm, labels, csv_cm_path)
+    save_classification_report_csv(y, y_pred, labels, csv_cr_path)
+
     if verbose:
-        print(f"[CV] {out_prefix.name} — accuracy: {acc:.6f}, f1_macro: {f1:.6f}")
-    return {
-        'accuracy': acc,
-        'precision_macro': prec,
-        'recall_macro': rec,
-        'f1_macro': f1,
-        'confusion_matrix': cm,
-        'classification_report_df': cr_df
-    }
+        print(f"Guardados: {png_path}  {csv_cm_path}  {csv_cr_path}  (acc={acc:.6f}, f1_macro={f1:.6f})")
+
+    return {'accuracy': acc, 'f1_macro': f1, 'png': png_path, 'csv_conf': csv_cm_path, 'csv_cr': csv_cr_path, 'confusion_matrix': cm}
 
 # ---------------------------
 # MAIN
 # ---------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Entrena y guarda modelos finales + reportes (matrices de confusión y classification reports) en español.")
+    parser = argparse.ArgumentParser(description="Genera PNG/CSV con títulos en español y guarda modelos con nombres claros.")
     parser.add_argument("--input_csv", type=str, default="data/final/All_features.csv", help="CSV completo (baseline).")
     parser.add_argument("--reduced_csv", type=str, default="data/final/All_features_orange_top8.csv", help="CSV reducido (Orange top8).")
     parser.add_argument("--target_col", type=str, default="Clase")
-    parser.add_argument("--cv", choices=['stratified'], default='stratified', help="Tipo de CV (solo stratified implementado).")
     parser.add_argument("--n_splits", type=int, default=5)
     parser.add_argument("--save_models", action="store_true", help="Si se pasa, guarda modelos finales entrenados sobre la matriz reducida.")
     parser.add_argument("--models_dir", type=str, default="models")
@@ -128,91 +153,75 @@ def main():
     if args.target_col not in df_full.columns:
         raise ValueError(f"No existe columna target '{args.target_col}' en {inp}")
 
-    # etiquetas/labels ordenadas
     y_full = df_full[args.target_col].astype(str)
     labels = sorted(y_full.unique())
 
-    # Baseline: usar todas las columnas numéricas (excluir metadata si existen)
+    # Baseline X (solo numéricas)
     metadata = [c for c in ['Sujeto','Clase','archivo','start_idx','end_idx'] if c in df_full.columns]
-    X_full = df_full.drop(columns=[c for c in metadata if c in df_full.columns], errors='ignore')
-    X_full = X_full.select_dtypes(include=[np.number])
-    printv(f"Baseline: {X_full.shape[1]} features numéricas", args.verbose)
-    # Reduced: cargar X_red (asegurar que están las columnas numéricas)
-    meta_red = [c for c in ['Sujeto','Clase','archivo','start_idx','end_idx'] if c in df_red.columns]
-    X_red = df_red.drop(columns=[c for c in meta_red if c in df_red.columns], errors='ignore')
-    X_red = X_red.select_dtypes(include=[np.number])
-    printv(f"Reducida: {X_red.shape[1]} features (Orange top8)", args.verbose)
+    X_full = df_full.drop(columns=[c for c in metadata if c in df_full.columns], errors='ignore').select_dtypes(include=[np.number])
+    X_red = df_red.drop(columns=[c for c in metadata if c in df_red.columns], errors='ignore').select_dtypes(include=[np.number])
 
-    # Crear CV
+    if X_full.shape[1] == 0 or X_red.shape[1] == 0:
+        raise ValueError("X_full o X_red no contienen features numéricas.")
+
     cv = StratifiedKFold(n_splits=args.n_splits, shuffle=True, random_state=42)
 
-    # Pipelines con imputación por mediana + escalado
-    svm_pipe = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler()),
-        ('svc', SVC(kernel='rbf', C=1.0, gamma='scale'))
-    ])
-    knn_pipe = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler()),
-        ('knn', KNeighborsClassifier(n_neighbors=5))
-    ])
+    # Pipelines
+    svm_pipe = Pipeline([('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler()), ('svc', SVC(kernel='rbf', C=1.0, gamma='scale'))])
+    knn_pipe = Pipeline([('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler()), ('knn', KNeighborsClassifier(n_neighbors=5))])
 
-    # --- 1) Evaluación baseline (todas las features) ---
-    print("Evaluando BASELINE (todas las features numéricas) con CV...")
-    res_baseline_svm = cv_predict_and_report(X_full, y_full, svm_pipe, cv, labels, reports_dir / "baseline_SVM_confmat", verbose=args.verbose)
-    res_baseline_knn = cv_predict_and_report(X_full, y_full, knn_pipe, cv, labels, reports_dir / "baseline_kNN_confmat", verbose=args.verbose)
+     # NOMBRES/TITULOS solicitados por ti (en español)
+    title_svm_full = "Métricas para SVM con todas las características"
+    title_svm_red  = "Métricas para SVM con 8 características"
+    title_knn_full = "Métricas para k-NN con todas las características"
+    title_knn_red  = "Métricas para k-NN con 8 características"
 
-    # --- 2) Evaluación reducida (Orange top8) ---
-    print("Evaluando REDUCIDA (Orange top8) con CV...")
+    # filenames (exactamente igual que los títulos)
+    base_svm_full = "Métricas para SVM con todas las características"
+    base_svm_red  = "Métricas para SVM con 8 características"
+    base_knn_full = "Métricas para k-NN con todas las características"
+    base_knn_red  = "Métricas para k-NN con 8 características"
+
+    # Ejecutar CV y guardar archivos (PNG + CSVs)
+    printv("Evaluando BASELINE para SVM y k-NN y guardando PNG/CSV...", args.verbose)
+    res_svm_full = cv_predict_and_save(X_full, y_full, svm_pipe, cv, labels, reports_dir, title_svm_full, base_svm_full, verbose=args.verbose)
+    res_knn_full = cv_predict_and_save(X_full, y_full, knn_pipe, cv, labels, reports_dir, title_knn_full, base_knn_full, verbose=args.verbose)
+
+    printv("Evaluando REDUCIDA (8 features) para SVM y k-NN y guardando PNG/CSV...", args.verbose)
     y_red = df_red[args.target_col].astype(str)
-    res_reduced_svm = cv_predict_and_report(X_red, y_red, svm_pipe, cv, labels, reports_dir / "reduced_SVM_confmat", verbose=args.verbose)
-    res_reduced_knn = cv_predict_and_report(X_red, y_red, knn_pipe, cv, labels, reports_dir / "reduced_kNN_confmat", verbose=args.verbose)
+    res_svm_red = cv_predict_and_save(X_red, y_red, svm_pipe, cv, labels, reports_dir, title_svm_red, base_svm_red, verbose=args.verbose)
+    res_knn_red = cv_predict_and_save(X_red, y_red, knn_pipe, cv, labels, reports_dir, title_knn_red, base_knn_red, verbose=args.verbose)
 
-    # --- 3) Guardar resumen comparativo (CSV con métricas agregadas) ---
-    rows = []
-    rows.append({
-        'model': 'SVM_RBF',
-        'baseline_acc_mean': res_baseline_svm['accuracy'],
-        'baseline_f1_macro': res_baseline_svm['f1_macro'],
-        'reduced_acc_mean': res_reduced_svm['accuracy'],
-        'reduced_f1_macro': res_reduced_svm['f1_macro']
-    })
-    rows.append({
-        'model': 'kNN_k5',
-        'baseline_acc_mean': res_baseline_knn['accuracy'],
-        'baseline_f1_macro': res_baseline_knn['f1_macro'],
-        'reduced_acc_mean': res_reduced_knn['accuracy'],
-        'reduced_f1_macro': res_reduced_knn['f1_macro']
-    })
-    df_comp = pd.DataFrame(rows)
-    comp_csv = reports_dir / "final_models_comparison_summary.csv"
-    df_comp.to_csv(comp_csv, index=False)
+    # Guardar resumen comparativo (CSV)
+    comp_rows = [
+        {'model': 'SVM_RBF', 'baseline_acc_mean': res_svm_full['accuracy'], 'baseline_f1_macro': res_svm_full['f1_macro'],
+         'reduced_acc_mean': res_svm_red['accuracy'], 'reduced_f1_macro': res_svm_red['f1_macro']},
+        {'model': 'kNN_k5', 'baseline_acc_mean': res_knn_full['accuracy'], 'baseline_f1_macro': res_knn_full['f1_macro'],
+         'reduced_acc_mean': res_knn_red['accuracy'], 'reduced_f1_macro': res_knn_red['f1_macro']}
+    ]
+    comp_df = pd.DataFrame(comp_rows)
+    comp_csv_name = sanitize_filename("Comparación_baseline_vs_8_caracteristicas.csv")
+    comp_csv = reports_dir / comp_csv_name
+    comp_df.to_csv(comp_csv, index=False)
     print("Resumen comparativo guardado en:", comp_csv)
 
-    # --- 4) Entrenar modelos finales sobre toda la matriz reducida y guardarlos (opcional si --save_models) ---
+    # Entrenar y guardar modelos finales (si el usuario pidió guardar)
     if args.save_models:
-        print("Entrenando modelos finales sobre la matriz REDUCIDA y guardando en 'models/' ...")
-        # entrenar con todo X_red, y_red
+        print("Entrenando modelos finales sobre la matriz reducida y guardando modelos con nombres claros...")
         svm_pipe.fit(X_red, y_red)
         knn_pipe.fit(X_red, y_red)
-        joblib.dump(svm_pipe, models_dir / "SVM_orange_top8_final.joblib")
-        joblib.dump(knn_pipe, models_dir / "kNN_orange_top8_final.joblib")
-        print("Modelos guardados en:", models_dir)
-
-    # --- 5) Guardar classification reports por modelo (CSV ya generado en cv_predict_and_report) ---
-    # (ya los guardamos como CSV al crear las figuras)
-
-    # --- 6) Guardar también las matrices de confusión numéricas para el reporte (CSV) ---
-    # Baseline SVM
-    pd.DataFrame(res_baseline_svm['confusion_matrix'], index=labels, columns=labels).to_csv(reports_dir / "baseline_SVM_confusion_matrix.csv")
-    pd.DataFrame(res_baseline_knn['confusion_matrix'], index=labels, columns=labels).to_csv(reports_dir / "baseline_kNN_confusion_matrix.csv")
-    pd.DataFrame(res_reduced_svm['confusion_matrix'], index=labels, columns=labels).to_csv(reports_dir / "reduced_SVM_confusion_matrix.csv")
-    pd.DataFrame(res_reduced_knn['confusion_matrix'], index=labels, columns=labels).to_csv(reports_dir / "reduced_kNN_confusion_matrix.csv")
+        # nombres de modelos (saneados para filename)
+        model_svm_name = sanitize_filename("SVM_todas_caracteristicas.joblib")
+        model_knn_name = sanitize_filename("kNN_8_caracteristicas.joblib")
+        joblib.dump(svm_pipe, Path(models_dir) / model_svm_name)
+        joblib.dump(knn_pipe, Path(models_dir) / model_knn_name)
+        print("Modelos guardados en:", models_dir, "->", model_svm_name, model_knn_name)
 
     t1 = time.time()
     print("\nProceso completado en {:.1f} s.".format(t1 - t0))
-    print("Revisa la carpeta:", reports_dir, "y models (si pediste guardar).")
+    print("Revisa la carpeta:", reports_dir)
+    if args.save_models:
+        print("Modelos guardados en:", models_dir)
 
 if __name__ == "__main__":
     main()
