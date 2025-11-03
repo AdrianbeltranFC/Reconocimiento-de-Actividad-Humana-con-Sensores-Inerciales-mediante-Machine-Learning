@@ -85,7 +85,7 @@ python src/02_feature_extraction.py --processed_dir data/processed --features_di
 python src/07_finalize_models_and_reports.py --input_csv data/final/All_features.csv --reduced_csv data/final/All_features_orange_top8.csv --n_splits 5 --save_models --verbose
 ```
 
-## 📊 Resultados
+## Resultados
 
 ### Comparación de Accuracy entre modelos 
 | Modelo  | Con todas las features | Con 8 features |
