@@ -11,11 +11,11 @@ Proyecto para clasificación de actividades usando features extraídas de señal
 
 ---
 ##  Tabla de Contenidos
-1. [Descripción](#descripción)
-2. [Estructura del Proyecto](#estructura-del-proyecto)
-3. [Instalación](#instalación)
-4. [Ejecución de Scripts](#ejecución-de-scripts)
-5. [Resultados](#resultados)
+1. [Descripción](#Descripción)
+2. [Estructura del Proyecto](#Organización-del-repositorio-y-descripción-de-las-carpetas)
+3. [Instalación](#Instalación)
+4. [Ejecución de Scripts](#Ejecución-de-scripts)
+5. [Resultados](#Resultados)
 
 ##  Descripción
 Este proyecto implementa un sistema de reconocimiento de actividad humana (HAR) basado en datos provenientes de sensores inerciales (Inertial Measurement Units, IMU). El objetivo es clasificar actividades como caminar, correr y permanecer quieto mediante el análisis de características estadísticas extraídas de señales de aceleración y velocidad angular.
@@ -24,7 +24,7 @@ El flujo completo del sistema abarca desde el preprocesamiento y segmentación d
 
 Asimismo, se incluye una comparación de desempeño entre modelos entrenados con todas las características y aquellos optimizados con las 8 variables más relevantes según el método de selección Orange (top-8 features), demostrando que la reducción de dimensionalidad mantiene una alta precisión con menor complejidad computacional.
 
-## Organización del repositorio y descripción de las carpetas principales:
+## Organización del repositorio y descripción de las carpetas
 
 - `/data/`: Contiene los conjuntos de datos generados en las diferentes etapas del flujo de trabajo.
     -`/final/`: Archivos CSV utilizados para el entrenamiento y evaluación de los modelos.
