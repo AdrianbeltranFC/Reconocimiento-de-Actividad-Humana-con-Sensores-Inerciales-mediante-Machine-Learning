@@ -28,8 +28,8 @@ Asimismo, se incluye una comparación de desempeño entre modelos entrenados con
 
 - `/data/`: Contiene los conjuntos de datos generados en las diferentes etapas del flujo de trabajo.
     -`/final/`: Archivos CSV utilizados para el entrenamiento y evaluación de los modelos.
-        All_features.csv: Dataset completo con todas las características extraídas.
-        All_features_orange_top8.csv: Dataset reducido con las 8 características seleccionadas por relevancia.
+        - `All_features.csv`: Dataset completo con todas las características extraídas.
+        - `All_features_orange_top8.csv`: Dataset reducido con las 8 características seleccionadas por relevancia.
 
 - `/models/`: Modelos de aprendizaje automático entrenados.
     - `SVM_todas_caracteristicas.joblib`: Modelo SVM con todas las características.
