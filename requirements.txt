@@ -12,7 +12,8 @@ joblib
 matplotlib
 seaborn
 
-# Dependencias adicionales para la interfaz
+# Dependencias adicionales para la interfas versión: v2.0 
 pyqt5 
 pyqtgraph 
 bleak
+qdarkstyle
