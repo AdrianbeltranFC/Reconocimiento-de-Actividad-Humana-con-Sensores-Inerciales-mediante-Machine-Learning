@@ -11,3 +11,8 @@ joblib
 # Dependencias de Gráficas
 matplotlib
 seaborn
+
+# Dependencias adicionales para la interfaz
+pyqt5 
+pyqtgraph 
+bleak
