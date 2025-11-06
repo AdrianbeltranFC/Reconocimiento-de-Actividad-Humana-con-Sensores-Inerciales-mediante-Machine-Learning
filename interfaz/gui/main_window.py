@@ -1,20 +1,22 @@
 # interfaz/gui/main_window.py
 """
-Interfaz principal (completa) — versión que remuestrea a 100Hz y usa ventanas de 2.56s
-para ser coherente con el preprocesado / entrenamiento del modelo KNN.
-Incluye:
- - Modo A: cargar CSV -> preprocesar para el modelo -> ventana 2.56s -> predicción por ventana -> graficar.
- - Modo B: adquisición BLE (o simulación) -> buffer -> guardar CSV.
- - Modo C: realtime -> toma ventanas crudas, remuestrea a 100Hz, extrae top8 y predice por ventana.
+Interfaz principal para AVDs con sensores inerciales.
 
- python -m interfaz.gui.main_window 
+- Modo A: cargar CSV -> preprocesado coherente con el entrenamiento (100 Hz) ->
+          segmentación en ventanas (2.56 s) -> extracción top8 -> predicción por ventana ->
+          graficar y guardar diagnósticos.
+- Modo B: adquisición BLE (o simulación) -> buffer -> guardar CSV crudo.
+- Modo C: realtime -> toma ventana cruda -> remuestrea a 100 Hz -> extrae top8 -> predecir.
+
+Uso:
+    python -m interfaz.gui.main_window
 """
 
 import sys
 import time
 import csv
 import random
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 
 from PyQt5.QtWidgets import (
@@ -42,7 +44,7 @@ try:
 except Exception:
     HAS_BLEAK = False
 
-# Importar funciones/core que deben existir en interfaz/core/
+# Importar funciones/core del repo - asegúrate que existan en interfaz/core/
 from interfaz.core.preprocessing import preprocess_csv_for_model, resample_window_to_fs
 from interfaz.core.pipeline import run_pipeline_on_processed_df
 from interfaz.core.top8 import window_df_to_top8, ORANGE_TOP8
@@ -51,10 +53,50 @@ import joblib
 import numpy as np
 import pandas as pd
 
-# Configuración por defecto (tu modelo, UUIDs y MAC ya indicados)
+# Configuración por defecto (ruta del modelo proporcionada por ti)
 DEFAULT_BLE_MAC = "eb:33:2e:f9:57:b5"
 READ_CHAR_UUID = "0000ffe4-0000-1000-8000-00805f9a34fb"
 DEFAULT_MODEL_PATH = Path("models/k-NN/kNN_8_caracteristicas.joblib")
+
+
+# ---------------------------
+# Helper: predicción segura usando DataFrame con nombres esperados
+# ---------------------------
+def predict_with_model_df(model, df_features: pd.DataFrame):
+    """
+    model: sklearn Pipeline (imputer, scaler, knn)
+    df_features: DataFrame que contiene ORANGE_TOP8 y opcionalmente window_center_time
+    Retorna: (y_pred, y_proba)
+    Asegura pasar DataFrame con los nombres en el orden esperado por model.feature_names_in_ si existe.
+    """
+    Xdf = df_features.copy()
+    # quitar columna de tiempo si existe
+    if 'window_center_time' in Xdf.columns:
+        Xdf = Xdf.drop(columns=['window_center_time'])
+
+    # comprobar columnas necesarias
+    for c in ORANGE_TOP8:
+        if c not in Xdf.columns:
+            raise ValueError(f"Falta la columna de feature esperada: '{c}' en df_features")
+
+    # reordenar según lo que el modelo espera (si es que lo guarda)
+    if hasattr(model, 'feature_names_in_'):
+        expected = list(model.feature_names_in_)
+        missing = [c for c in expected if c not in Xdf.columns]
+        if missing:
+            raise ValueError(f"Faltan columnas esperadas por el modelo: {missing}")
+        Xdf = Xdf[expected]
+
+    # predecir
+    y_pred = model.predict(Xdf)
+    y_proba = None
+    if hasattr(model, 'predict_proba'):
+        try:
+            y_proba = model.predict_proba(Xdf)
+        except Exception:
+            y_proba = None
+    return y_pred, y_proba
+
 
 # ---------------------------
 # BLEWorker: hilo que lee notificaciones BLE y emite muestras (dict)
@@ -68,7 +110,7 @@ class BLEWorker(QThread):
         self.address = address
         self.notify_uuid = notify_uuid
         self._running = False
-        # intenta usar parser personalizado en repo si existe (ej. src.device_model.parse_notify)
+        # intentar usar parser del repo si existe
         try:
             from src.device_model import parse_notify as _repo_parse
             self._repo_parser = _repo_parse
@@ -127,8 +169,9 @@ class BLEWorker(QThread):
     def stop(self):
         self._running = False
 
+
 # ---------------------------
-# Modo A: cargar y procesar archivo (usando preprocess_csv_for_model)
+# Modo A: cargar y procesar archivo
 # ---------------------------
 class ModeAWidget(QWidget):
     def __init__(self, go_home_callback):
@@ -140,7 +183,7 @@ class ModeAWidget(QWidget):
         self.proc_btn = QPushButton("⚙️ Procesar archivo (para modelo)")
         self.back_btn = QPushButton("⬅️ Volver")
 
-        # Tabla donde mostramos las 8 features (valores promedio o de la última ventana)
+        # Tabla donde mostramos las 8 features (valores)
         self.table = QTableWidget(len(ORANGE_TOP8), 3)
         self.table.setHorizontalHeaderLabels(["Característica", "Valor", "Unidad"])
         unidades = ["g", "g", "g^2", "g", "g", "g", "g", "g·muestras"]
@@ -150,7 +193,7 @@ class ModeAWidget(QWidget):
             self.table.setItem(i, 0, it)
             self.table.setItem(i, 2, QTableWidgetItem(unidades[i]))
 
-        # Gráficas: señal cruda (resampleada a 100Hz) y predicción por ventana (scatter)
+        # Gráficas
         self.plot_raw = pg.PlotWidget(title="Acc X (resampleado a 100 Hz)")
         self.plot_pred = pg.PlotWidget(title="Predicciones por ventana (tiempo)")
         self.raw_curve = self.plot_raw.plot(pen=pg.mkPen('#6C63FF', width=1.5))
@@ -203,25 +246,84 @@ class ModeAWidget(QWidget):
             tmp_out = Path("interfaz_tmp_processed")
             tmp_out.mkdir(parents=True, exist_ok=True)
             # preprocess_csv_for_model -> devuelve df resampleado a 100Hz y filtrado
-            df_proc, meta = preprocess_csv_for_model(self.loaded_path,
-                                                     output_dir=str(tmp_out),
-                                                     target_fs=100.0,
-                                                     fc_butter=15.0,
-                                                     hampel_ms=200.0,
-                                                     sg_window=11,
-                                                     sg_poly=3,
-                                                     apply_savgol=True,
-                                                     expected_duration=30.0,
-                                                     verbose=False)
+            df_proc, meta = preprocess_csv_for_model(
+                self.loaded_path,
+                output_dir=str(tmp_out),
+                target_fs=100.0,
+                fc_butter=15.0,
+                hampel_ms=200.0,
+                sg_window=11,
+                sg_poly=3,
+                apply_savgol=True,
+                expected_duration=30.0,
+                verbose=False
+            )
             self.df_processed = df_proc
 
             # ---- 2) Pipeline: ventanas y predicción (usa ventana de 2.56 s en pipeline) ----
+            # IMPORTANTE: run_pipeline_on_processed_df debe aceptar solo el df procesado
             df_feat, indices, y_pred, y_proba = run_pipeline_on_processed_df(df_proc)
+
             self.df_features = df_feat
             self.y_pred = y_pred
             self.y_proba = y_proba
 
-            # ---- 3) Graficar señal resampleada ----
+            # ---- 2b) Validar que df_feat contenga las 8 features; intentar mapear si faltan ----
+            expected_columns = [
+                'Acceleration X(g)_mean', 'Acceleration X(g)_std', 'Acceleration X(g)_var',
+                'Acceleration X(g)_median', 'Acceleration X(g)_iqr',
+                'Acceleration X(g)_rms', 'Acceleration X(g)_ptp', 'Acceleration X(g)_sma'
+            ]
+            missing = [c for c in expected_columns if c not in df_feat.columns]
+            if missing:
+                # intentar heurística de mapeo
+                mapped = {}
+                available = list(df_feat.columns)
+                for exp in expected_columns:
+                    base = exp.split("_", 1)[0].lower().strip()
+                    found = None
+                    for col in available:
+                        if base in col.lower():
+                            found = col
+                            break
+                    if found:
+                        mapped[exp] = found
+                if set(mapped.keys()) == set(expected_columns):
+                    df_reordered = pd.DataFrame()
+                    for exp in expected_columns:
+                        df_reordered[exp] = df_feat[mapped[exp]].astype(float)
+                    if 'window_center_time' in df_feat.columns:
+                        df_reordered['window_center_time'] = df_feat['window_center_time']
+                    df_feat = df_reordered
+                    self.df_features = df_feat
+                else:
+                    raise ValueError(
+                        "Las columnas generadas por el pipeline no coinciden con las esperadas por el modelo.\n"
+                        f"Esperadas: {expected_columns}\n"
+                        f"Disponibles en df_feat: {available}\n"
+                        "Ajusta el preprocesado/pipeline o añade un mapeo."
+                    )
+
+            # ---- Guardar diagnósticos: features y predicciones por ventana ----
+            diag_dir = Path("interfaz_diagnostics")
+            diag_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                df_feat.to_csv(diag_dir / f"{Path(self.loaded_path).stem}_features_windows.csv", index=False)
+            except Exception:
+                try:
+                    pd.DataFrame(df_feat).to_csv(diag_dir / f"{Path(self.loaded_path).stem}_features_windows.csv", index=False)
+                except Exception:
+                    pass
+
+            pred_df = pd.DataFrame({
+                'window_center_time': df_feat['window_center_time'] if 'window_center_time' in df_feat.columns else np.arange(len(y_pred)),
+                'pred': list(y_pred)
+            })
+            if y_proba is not None:
+                pred_df['conf_max'] = [float(np.max(p)) for p in y_proba]
+            pred_df.to_csv(diag_dir / f"{Path(self.loaded_path).stem}_pred_windows.csv", index=False)
+
+            # ---- 3) Graficar señal resampleada (Acc X) ----
             t = df_proc['time'].to_numpy(dtype=float)
             y = df_proc.get('Acceleration X(g)', np.zeros_like(t)).to_numpy(dtype=float)
             self.plot_raw.clear()
@@ -230,7 +332,6 @@ class ModeAWidget(QWidget):
 
             # ---- 4) Graficar predicciones por ventana como puntos coloreados ----
             times = df_feat['window_center_time'].to_numpy(dtype=float)
-            # mapear clases a enteros y colores
             unique_labels = list(dict.fromkeys(list(y_pred)))
             class_map = {lbl: i for i, lbl in enumerate(unique_labels)}
             palette = ['#6C63FF', '#48C9B0', '#F39C12', '#E74C3C', '#9B59B6']
@@ -238,19 +339,18 @@ class ModeAWidget(QWidget):
             yvals = np.array([class_map[lbl] for lbl in y_pred])
 
             self.plot_pred.clear()
-            scatter = ScatterPlotItem(size=12)
+            scatter = ScatterPlotItem(size=10)
             spots = []
             for xi, yi, lbl in zip(times - t[0], yvals, y_pred):
                 spots.append({'pos': (float(xi), float(yi)), 'brush': color_map[lbl], 'symbol': 'o'})
             scatter.addPoints(spots)
             self.plot_pred.addItem(scatter)
-            # ajustar ticks del eje Y para mostrar etiquetas de clase
             ticks = [(v, str(k)) for k, v in class_map.items()]
             self.plot_pred.getPlotItem().getAxis('left').setTicks([ticks])
             self.plot_pred.setLabel('bottom', 'Tiempo (s)')
             self.plot_pred.setLabel('left', 'Clase (ventana)')
 
-            # ---- 5) Tabla: medias de features (opcional) ----
+            # ---- 5) Tabla: medias de features (top8) ----
             avg = df_feat[ORANGE_TOP8].mean(axis=0)
             for i, col in enumerate(ORANGE_TOP8):
                 val = avg.get(col, np.nan)
@@ -408,6 +508,7 @@ class ModeBWidget(QWidget):
                 writer.writerow(row)
         QMessageBox.information(self, "Guardado", f"Archivo guardado:\n{fname}")
 
+
 # ---------------------------
 # Modo C: realtime - tomar ventana cruda -> remuestrear a 100Hz -> extraer top8 -> predecir
 # ---------------------------
@@ -454,6 +555,9 @@ class ModeCWidget(QWidget):
         self.window_len = None
         self.fs_assumed = 15.0  # si no hay timestamps, asumimos 15Hz crudo
 
+        # historial de predicciones para suavizar (majority vote)
+        self.pred_history = deque(maxlen=5)
+
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
         self.back_btn.clicked.connect(self.go_home_callback)
@@ -473,8 +577,6 @@ class ModeCWidget(QWidget):
         ok = self.load_model()
         if not ok:
             return
-        # calcular window_len en muestras crudas (no necesariamente 100Hz) no es necesario;
-        # para realtime tomamos las últimas muestras que cubran window_sec y luego remuestreamos a 100Hz.
         self.timer.start()
         QMessageBox.information(self, "Realtime", f"Realtime started (ventana={self.window_sec}s).")
 
@@ -490,7 +592,7 @@ class ModeCWidget(QWidget):
          - extraer acc_x y tiempos
          - remuestrear a 100 Hz con resample_window_to_fs
          - construir df_res con columnas 'time' y 'Acceleration X(g)'
-         - calcular top8 y predecir
+         - calcular top8 y predecir (usando DataFrame con nombres)
          - actualizar GUI (graf, etiqueta)
         """
         buf = self.get_source_buffer()
@@ -529,10 +631,9 @@ class ModeCWidget(QWidget):
         # remuestrear a 100Hz
         try:
             new_t_rel, new_acc = resample_window_to_fs(raw_times, acc_x, target_fs=100.0)
-        except Exception as e:
+        except Exception:
             # si falla interpolación, intentar simple rellenado
             try:
-                # crear vector uniforme de duración ~window_sec con 100Hz
                 duration = raw_times[-1] - raw_times[0] if not np.isnan(raw_times[-1]) and not np.isnan(raw_times[0]) else self.window_sec
                 if duration <= 0:
                     duration = self.window_sec
@@ -555,17 +656,20 @@ class ModeCWidget(QWidget):
         # extraer features (top8) y predecir
         try:
             feats = window_df_to_top8(df_res, acc_x_col_name='Acceleration X(g)')
-            X = feats.values.reshape(1, -1)
-            pred = self.model.predict(X)[0]
-            conf = None
-            if hasattr(self.model, 'predict_proba'):
-                try:
-                    proba = self.model.predict_proba(X)
-                    conf = float(np.max(proba))
-                except Exception:
-                    conf = None
-            self.pred_label.setText(f"Predicción actual: {pred}")
-            self.conf_label.setText(f"Confianza: {conf:.3f}" if conf is not None else "Confianza: -")
+            # convertir a DataFrame con nombres ORANGE_TOP8
+            df_single = pd.DataFrame([feats.values], columns=ORANGE_TOP8)
+            # predecir usando DataFrame (evita warnings)
+            y_pred, y_proba = predict_with_model_df(self.model, df_single)
+            pred_label = y_pred[0]
+            pred_conf = float(np.max(y_proba[0])) if y_proba is not None else None
+
+            # suavizado: majority vote en pred_history
+            self.pred_history.append(pred_label)
+            hist = Counter(list(self.pred_history))
+            smooth_pred = hist.most_common(1)[0][0]
+
+            self.pred_label.setText(f"Predicción actual (suavizada): {smooth_pred}")
+            self.conf_label.setText(f"Confianza: {pred_conf:.3f}" if pred_conf is not None else "Confianza: -")
         except Exception as e:
             # no bloquear GUI: imprimir error en consola
             print("Error realtime predict:", e)
@@ -595,11 +699,13 @@ class HomeScreen(QWidget):
         btnC = QPushButton("🧠 Modo C - Procesamiento en Tiempo Real")
 
         for btn, color, idx in zip([btnA, btnB, btnC], ["#6C63FF", "#48C9B0", "#F39C12"], [1, 2, 3]):
-            btn.setStyleSheet(f"background-color: {color}; color: white; padding: 12px; font-weight: bold; border-radius: 10px;")
+            btn.setStyleSheet(
+                f"background-color: {color}; color: white; padding: 12px; font-weight: bold; border-radius: 10px;"
+            )
             btn.setCursor(QCursor(Qt.PointingHandCursor))
             btn.clicked.connect(lambda checked, x=idx: self.switch_callback(x))
 
-        footer = QLabel("Desarrollado por Lalo Varela  |  Proyecto de Análisis de Marcha 2025")
+        footer = QLabel("Desarrollado por Adrián Beltrán, Lalo Varela y Paola Guzmán")
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet("color: #666666; font-size: 12px;")
 
@@ -659,4 +765,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-# ---------------------------
