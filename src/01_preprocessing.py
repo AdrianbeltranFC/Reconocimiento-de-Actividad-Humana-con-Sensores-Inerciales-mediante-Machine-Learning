@@ -6,6 +6,13 @@
 - Política: recortar si > expected_duration; rechazar si < tol_lower y pocas muestras. La razón es para
   evitar que archivos mal grabados con tiempos erróneos afecten la calidad del dataset final.
 - Filtros: Hampel + Butterworth + Savitzky-Golay.
+
+Como usar:
+python src/01_preprocessing.py --input_dir data/raw --output_dir data/processed --target_fs 100
+
+Nota: No olvides activar tu entorno virtual que tiene todas las librerias necesarias para
+compilar los códigos (: 
+) --fc_butter 15 --hampel_ms 200 --expected_duration 30 --tol_lower 28 --tol_upper 35 --verbose
 """
 
 import os, re, argparse
