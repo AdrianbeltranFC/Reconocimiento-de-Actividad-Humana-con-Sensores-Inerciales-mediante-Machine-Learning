@@ -1,122 +1,74 @@
-# -------------------------------
-# ARCHIVO: interfaz/gui/main_window.py
-# -------------------------------
+# interfaz/gui/main_window.py
 """
-Aplicación PyQt5 con tres modos:
- - Modo A: cargar CSV y procesar (offline)
- - Modo B: adquisición BLE (start/stop), visualización y guardado de crudo
- - Modo C: procesamiento en tiempo real con ventanas deslizantes (usa el modelo k-NN)
+Interfaz principal (completa) — versión que remuestrea a 100Hz y usa ventanas de 2.56s
+para ser coherente con el preprocesado / entrenamiento del modelo KNN.
+Incluye:
+ - Modo A: cargar CSV -> preprocesar para el modelo -> ventana 2.56s -> predicción por ventana -> graficar.
+ - Modo B: adquisición BLE (o simulación) -> buffer -> guardar CSV.
+ - Modo C: realtime -> toma ventanas crudas, remuestrea a 100Hz, extrae top8 y predice por ventana.
 
-Instrucciones rápidas:
- - Colocar los archivos de este paquete en: interfaz/core/... e interfaz/gui/main_window.py
- - Asegúrate de tener instalada la librería bleak para BLE y pyqt5/pyqtgraph para la GUI
- (están en requirements.txt)
- - Ejecutar: python -m interfaz.gui.main_window 
+ python -m interfaz.gui.main_window 
 """
+
 import sys
-from PyQt5 import QtWidgets, QtCore
-import pyqtgraph as pg
-import pandas as pd
-import numpy as np
-from pathlib import Path
-import csv
 import time
-from collections import deque
+import csv
+import random
+from collections import Counter
+from pathlib import Path
 
-from interfaz.core.preprocessing import preprocess_csv
-from interfaz.core.pipeline import run_pipeline_on_processed_df
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QPushButton, QLabel, QVBoxLayout,
+    QHBoxLayout, QTableWidget, QTableWidgetItem, QLineEdit, QGroupBox,
+    QStackedWidget, QFileDialog, QMessageBox
+)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread
+from PyQt5.QtGui import QCursor
 
-# Intento de importar bleak (si no está, el modo BLE mostrará error al iniciar)
+import pyqtgraph as pg
+from pyqtgraph import ScatterPlotItem
+
+# Tema oscuro opcional
+try:
+    import qdarkstyle
+    HAS_QDARK = True
+except Exception:
+    HAS_QDARK = False
+
+# BLE opcional (Bleak)
 try:
     from bleak import BleakClient
     HAS_BLEAK = True
 except Exception:
     HAS_BLEAK = False
 
-# Valores BLE por defecto que proporcionaste
-DEFAULT_BLE_MAC = 'eb:33:2e:f9:57:b5'
-SERVICE_UUID = '0000ffe5-0000-1000-8000-00805f9a34fb'
-READ_CHAR_UUID = '0000ffe4-0000-1000-8000-00805f9a34fb'
-WRITE_CHAR_UUID = '0000ffe9-0000-1000-8000-00805f9a34fb'
+# Importar funciones/core que deben existir en interfaz/core/
+from interfaz.core.preprocessing import preprocess_csv_for_model, resample_window_to_fs
+from interfaz.core.pipeline import run_pipeline_on_processed_df
+from interfaz.core.top8 import window_df_to_top8, ORANGE_TOP8
 
+import joblib
+import numpy as np
+import pandas as pd
 
-class ModeAWidget(QtWidgets.QWidget):
-    """Widget para Modo A: cargar CSV, ejecutar pipeline y mostrar features/predicciones."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.load_btn = QtWidgets.QPushButton('Cargar CSV')
-        self.load_btn.clicked.connect(self.on_load)
-        self.save_feat_btn = QtWidgets.QPushButton('Guardar features (.csv)')
-        self.save_feat_btn.clicked.connect(self.on_save_features)
-        self.table = QtWidgets.QTableWidget()
-        self.pred_label = QtWidgets.QLabel('Predicciones: -')
-        layout = QtWidgets.QVBoxLayout(self)
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(self.load_btn)
-        row.addWidget(self.save_feat_btn)
-        layout.addLayout(row)
-        layout.addWidget(self.table)
-        layout.addWidget(self.pred_label)
-        self.df_features = None
-        self.y_pred = None
-        self.y_proba = None
+# Configuración por defecto (tu modelo, UUIDs y MAC ya indicados)
+DEFAULT_BLE_MAC = "eb:33:2e:f9:57:b5"
+READ_CHAR_UUID = "0000ffe4-0000-1000-8000-00805f9a34fb"
+DEFAULT_MODEL_PATH = Path("models/k-NN/kNN_8_caracteristicas.joblib")
 
-    def on_load(self):
-        fname, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Selecciona CSV', filter='CSV Files (*.csv)')
-        if not fname:
-            return
-        df_proc, meta = preprocess_csv(fname, output_path=None, target_fs=None, apply_filters=True)
-        try:
-            df_feat, indices, y_pred, y_proba = run_pipeline_on_processed_df(df_proc)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Error', f'Error ejecutando pipeline: {e}')
-            return
-        self.df_features = df_feat
-        self.y_pred = y_pred
-        self.y_proba = y_proba
-        self._show_table(df_feat)
-        self.pred_label.setText('Predicciones ventanas: ' + str(list(y_pred)))
-
-    def _show_table(self, df: pd.DataFrame):
-        self.table.clear()
-        self.table.setColumnCount(len(df.columns))
-        self.table.setRowCount(len(df))
-        self.table.setHorizontalHeaderLabels(list(df.columns))
-        for i in range(len(df)):
-            for j, col in enumerate(df.columns):
-                val = df.iloc[i, j]
-                it = QtWidgets.QTableWidgetItem(str(np.round(val, 6) if pd.notna(val) else 'nan'))
-                self.table.setItem(i, j, it)
-        self.table.resizeColumnsToContents()
-
-    def on_save_features(self):
-        if self.df_features is None:
-            QtWidgets.QMessageBox.warning(self, 'Aviso', 'No hay features para guardar')
-            return
-        fname, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Guardar features', filter='CSV Files (*.csv)')
-        if not fname:
-            return
-        self.df_features.to_csv(fname, index=False)
-        QtWidgets.QMessageBox.information(self, 'Guardado', f'Features guardadas en {fname}')
-
-
-class BLEWorker(QtCore.QThread):
-    """Hilo que gestiona la conexión BLE y emite muestras parseadas.
-
-    - Emite `sample_signal` con un diccionario que debe contener al menos:
-      {'Acceleration X(g)', 'Acceleration Y(g)', 'Acceleration Z(g)',
-       'Gyroscope X(deg/s)', 'Gyroscope Y(deg/s)', 'Gyroscope Z(deg/s)', 'time'}
-    - Si en el repo existe una función parse_notify la intentará usar.
-    """
-    sample_signal = QtCore.pyqtSignal(dict)
-    status_signal = QtCore.pyqtSignal(str)
+# ---------------------------
+# BLEWorker: hilo que lee notificaciones BLE y emite muestras (dict)
+# ---------------------------
+class BLEWorker(QThread):
+    sample_received = pyqtSignal(dict)
+    status = pyqtSignal(str)
 
     def __init__(self, address: str, notify_uuid: str, parent=None):
         super().__init__(parent)
         self.address = address
         self.notify_uuid = notify_uuid
         self._running = False
-        # intentar usar parser del repo si existe
+        # intenta usar parser personalizado en repo si existe (ej. src.device_model.parse_notify)
         try:
             from src.device_model import parse_notify as _repo_parse
             self._repo_parser = _repo_parse
@@ -125,7 +77,7 @@ class BLEWorker(QtCore.QThread):
 
     def run(self):
         if not HAS_BLEAK:
-            self.status_signal.emit('Bleak no disponible (instala bleak)')
+            self.status.emit("bleak no disponible")
             return
         self._running = True
         import asyncio
@@ -135,221 +87,475 @@ class BLEWorker(QtCore.QThread):
         client = BleakClient(self.address)
         try:
             await client.connect()
-            self.status_signal.emit('Conectado')
-
+            self.status.emit("Conectado (BLE)")
             def callback(sender, data: bytearray):
                 sample = None
-                # intentar parser del repo
                 if self._repo_parser is not None:
                     try:
                         sample = self._repo_parser(data)
                     except Exception:
                         sample = None
                 if sample is None:
-                    # intentar parse ASCII CSV "ax,ay,az,gx,gy,gz"
+                    # intentar parse ASCII "ax,ay,az,gx,gy,gz"
                     try:
-                        s = data.decode('utf-8').strip()
-                        parts = s.split(',')
+                        s = data.decode("utf-8").strip()
+                        parts = s.split(",")
                         if len(parts) >= 6:
                             ax, ay, az, gx, gy, gz = map(float, parts[:6])
                             sample = {
-                                'Acceleration X(g)': ax, 'Acceleration Y(g)': ay, 'Acceleration Z(g)': az,
-                                'Gyroscope X(deg/s)': gx, 'Gyroscope Y(deg/s)': gy, 'Gyroscope Z(deg/s)': gz,
-                                'time': time.time()
+                                "Acceleration X(g)": ax,
+                                "Acceleration Y(g)": ay,
+                                "Acceleration Z(g)": az,
+                                "Gyroscope X(deg/s)": gx,
+                                "Gyroscope Y(deg/s)": gy,
+                                "Gyroscope Z(deg/s)": gz,
+                                "time": time.time()
                             }
                     except Exception:
                         sample = None
-                if sample is not None:
-                    self.sample_signal.emit(sample)
-
+                if sample:
+                    self.sample_received.emit(sample)
             await client.start_notify(self.notify_uuid, callback)
             while self._running:
                 await asyncio.sleep(0.1)
             await client.stop_notify(self.notify_uuid)
             await client.disconnect()
-            self.status_signal.emit('Desconectado')
+            self.status.emit("Desconectado (BLE)")
         except Exception as e:
-            self.status_signal.emit(f'Error BLE: {e}')
+            self.status.emit(f"Error BLE: {e}")
 
     def stop(self):
         self._running = False
 
+# ---------------------------
+# Modo A: cargar y procesar archivo (usando preprocess_csv_for_model)
+# ---------------------------
+class ModeAWidget(QWidget):
+    def __init__(self, go_home_callback):
+        super().__init__()
+        self.go_home_callback = go_home_callback
 
-class ModeBWidget(QtWidgets.QWidget):
-    """Widget para adquisición BLE: start/stop, visualización y guardado del crudo."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.addr_edit = QtWidgets.QLineEdit()
-        self.addr_edit.setPlaceholderText('Dirección MAC (p.ej. eb:33:2e:f9:57:b5)')
-        self.addr_edit.setText(DEFAULT_BLE_MAC)
-        self.uuid_edit = QtWidgets.QLineEdit()
-        self.uuid_edit.setPlaceholderText('Notify UUID (p.ej. 0000ffe4-...)')
-        self.uuid_edit.setText(READ_CHAR_UUID)
-        self.start_btn = QtWidgets.QPushButton('Start')
-        self.stop_btn = QtWidgets.QPushButton('Stop')
-        self.save_btn = QtWidgets.QPushButton('Guardar crudo')
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.addLegend()
-        self.acc_plot = self.plot_widget.plot(pen='r', name='Acc X')
-        self.gyr_plot = self.plot_widget.plot(pen='b', name='Gyr X')
-        layout = QtWidgets.QVBoxLayout(self)
-        hl = QtWidgets.QHBoxLayout()
-        hl.addWidget(self.addr_edit); hl.addWidget(self.uuid_edit); hl.addWidget(self.start_btn); hl.addWidget(self.stop_btn); hl.addWidget(self.save_btn)
-        layout.addLayout(hl)
-        layout.addWidget(self.plot_widget)
-        self.start_btn.clicked.connect(self.start)
-        self.stop_btn.clicked.connect(self.stop)
-        self.save_btn.clicked.connect(self.save_raw)
+        # Botones
+        self.load_btn = QPushButton("📂 Importar archivo (.csv)")
+        self.proc_btn = QPushButton("⚙️ Procesar archivo (para modelo)")
+        self.back_btn = QPushButton("⬅️ Volver")
+
+        # Tabla donde mostramos las 8 features (valores promedio o de la última ventana)
+        self.table = QTableWidget(len(ORANGE_TOP8), 3)
+        self.table.setHorizontalHeaderLabels(["Característica", "Valor", "Unidad"])
+        unidades = ["g", "g", "g^2", "g", "g", "g", "g", "g·muestras"]
+        for i, name in enumerate(ORANGE_TOP8):
+            it = QTableWidgetItem(name)
+            it.setFlags(it.flags() ^ Qt.ItemIsEditable)
+            self.table.setItem(i, 0, it)
+            self.table.setItem(i, 2, QTableWidgetItem(unidades[i]))
+
+        # Gráficas: señal cruda (resampleada a 100Hz) y predicción por ventana (scatter)
+        self.plot_raw = pg.PlotWidget(title="Acc X (resampleado a 100 Hz)")
+        self.plot_pred = pg.PlotWidget(title="Predicciones por ventana (tiempo)")
+        self.raw_curve = self.plot_raw.plot(pen=pg.mkPen('#6C63FF', width=1.5))
+        self.plot_raw.setLabel('left', 'Acc X (g)')
+        self.plot_raw.setLabel('bottom', 'Tiempo (s)')
+
+        self.pred_label = QLabel("Última ventana: —")
+        self.pred_label.setAlignment(Qt.AlignCenter)
+
+        # Layout
+        top_layout = QHBoxLayout()
+        top_layout.addWidget(self.load_btn)
+        top_layout.addWidget(self.proc_btn)
+        top_layout.addWidget(self.back_btn)
+
+        layout = QVBoxLayout()
+        layout.addLayout(top_layout)
+        layout.addWidget(self.plot_raw)
+        layout.addWidget(self.plot_pred)
+        layout.addWidget(self.table)
+        layout.addWidget(self.pred_label)
+        self.setLayout(layout)
+
+        # Estado
+        self.loaded_path = None
+        self.df_processed = None
+        self.df_features = None
+        self.y_pred = None
+        self.y_proba = None
+
+        # Conexiones
+        self.load_btn.clicked.connect(self.select_file)
+        self.proc_btn.clicked.connect(self.process_file)
+        self.back_btn.clicked.connect(self.go_home_callback)
+
+    def select_file(self):
+        fname, _ = QFileDialog.getOpenFileName(self, "Seleccionar CSV", filter="CSV Files (*.csv)")
+        if not fname:
+            return
+        self.loaded_path = fname
+        QMessageBox.information(self, "Archivo", f"Archivo seleccionado:\n{fname}")
+
+    def process_file(self):
+        """Proceso completo: preprocesado para modelo (100Hz) + pipeline ventanas 2.56s + predicciones."""
+        if not self.loaded_path:
+            QMessageBox.warning(self, "Sin archivo", "Importa un archivo CSV primero.")
+            return
+        try:
+            # ---- 1) Preprocesado compatible con entrenamiento ----
+            tmp_out = Path("interfaz_tmp_processed")
+            tmp_out.mkdir(parents=True, exist_ok=True)
+            # preprocess_csv_for_model -> devuelve df resampleado a 100Hz y filtrado
+            df_proc, meta = preprocess_csv_for_model(self.loaded_path,
+                                                     output_dir=str(tmp_out),
+                                                     target_fs=100.0,
+                                                     fc_butter=15.0,
+                                                     hampel_ms=200.0,
+                                                     sg_window=11,
+                                                     sg_poly=3,
+                                                     apply_savgol=True,
+                                                     expected_duration=30.0,
+                                                     verbose=False)
+            self.df_processed = df_proc
+
+            # ---- 2) Pipeline: ventanas y predicción (usa ventana de 2.56 s en pipeline) ----
+            df_feat, indices, y_pred, y_proba = run_pipeline_on_processed_df(df_proc)
+            self.df_features = df_feat
+            self.y_pred = y_pred
+            self.y_proba = y_proba
+
+            # ---- 3) Graficar señal resampleada ----
+            t = df_proc['time'].to_numpy(dtype=float)
+            y = df_proc.get('Acceleration X(g)', np.zeros_like(t)).to_numpy(dtype=float)
+            self.plot_raw.clear()
+            self.plot_raw.plot(t - t[0], y, pen=pg.mkPen('#6C63FF', width=1.5))
+            self.plot_raw.setLabel('bottom', 'Tiempo (s)')
+
+            # ---- 4) Graficar predicciones por ventana como puntos coloreados ----
+            times = df_feat['window_center_time'].to_numpy(dtype=float)
+            # mapear clases a enteros y colores
+            unique_labels = list(dict.fromkeys(list(y_pred)))
+            class_map = {lbl: i for i, lbl in enumerate(unique_labels)}
+            palette = ['#6C63FF', '#48C9B0', '#F39C12', '#E74C3C', '#9B59B6']
+            color_map = {lbl: palette[i % len(palette)] for i, lbl in enumerate(unique_labels)}
+            yvals = np.array([class_map[lbl] for lbl in y_pred])
+
+            self.plot_pred.clear()
+            scatter = ScatterPlotItem(size=12)
+            spots = []
+            for xi, yi, lbl in zip(times - t[0], yvals, y_pred):
+                spots.append({'pos': (float(xi), float(yi)), 'brush': color_map[lbl], 'symbol': 'o'})
+            scatter.addPoints(spots)
+            self.plot_pred.addItem(scatter)
+            # ajustar ticks del eje Y para mostrar etiquetas de clase
+            ticks = [(v, str(k)) for k, v in class_map.items()]
+            self.plot_pred.getPlotItem().getAxis('left').setTicks([ticks])
+            self.plot_pred.setLabel('bottom', 'Tiempo (s)')
+            self.plot_pred.setLabel('left', 'Clase (ventana)')
+
+            # ---- 5) Tabla: medias de features (opcional) ----
+            avg = df_feat[ORANGE_TOP8].mean(axis=0)
+            for i, col in enumerate(ORANGE_TOP8):
+                val = avg.get(col, np.nan)
+                self.table.setItem(i, 1, QTableWidgetItem(f"{val:.6g}"))
+
+            # ---- 6) Última predicción y confianza ----
+            last_pred = y_pred[-1]
+            conf = None
+            if y_proba is not None:
+                conf = float(np.max(y_proba[-1]))
+            self.pred_label.setText(f"Última ventana: {last_pred}  •  Confianza: {conf:.3f}" if conf is not None else f"Última ventana: {last_pred}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error procesando archivo:\n{e}")
+
+
+# ---------------------------
+# Modo B: adquisición BLE (o simulación)
+# ---------------------------
+class ModeBWidget(QWidget):
+    def __init__(self, go_home_callback):
+        super().__init__()
+        self.go_home_callback = go_home_callback
+
+        # Inputs y botones
+        self.mac_input = QLineEdit(DEFAULT_BLE_MAC)
+        self.uuid_input = QLineEdit(READ_CHAR_UUID)
+        self.start_btn = QPushButton("▶️ Iniciar adquisición")
+        self.stop_btn = QPushButton("⏹ Detener")
+        self.save_btn = QPushButton("💾 Guardar datos")
+        self.back_btn = QPushButton("⬅️ Volver")
+
+        # Plot
+        self.plot = pg.PlotWidget(title="Señales en tiempo real (AccX / GyrX)")
+        self.acc_curve = self.plot.plot(pen=pg.mkPen('#6C63FF', width=2))
+        self.gyr_curve = self.plot.plot(pen=pg.mkPen('#F39C12', width=2))
+
+        conn_group = QGroupBox("🔗 Conexión BLE")
+        conn_layout = QHBoxLayout()
+        conn_layout.addWidget(QLabel("MAC:"))
+        conn_layout.addWidget(self.mac_input)
+        conn_layout.addWidget(QLabel("UUID:"))
+        conn_layout.addWidget(self.uuid_input)
+        conn_group.setLayout(conn_layout)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.stop_btn)
+        btn_layout.addWidget(self.save_btn)
+        btn_layout.addWidget(self.back_btn)
+
+        layout = QVBoxLayout()
+        layout.addWidget(conn_group)
+        layout.addLayout(btn_layout)
+        layout.addWidget(self.plot)
+        self.setLayout(layout)
+
+        # Estado
         self.worker = None
-        self.buffer = []  # lista de diccionarios con muestras
-        self.plot_timer = QtCore.QTimer()
-        self.plot_timer.setInterval(200)
-        self.plot_timer.timeout.connect(self.update_plot)
+        self.buffer = []  # lista de dicts con muestras
+        self.simulate = not HAS_BLEAK
 
-    def start(self):
-        if not HAS_BLEAK:
-            QtWidgets.QMessageBox.critical(self, 'BLE', 'Bleak no está instalado o no disponible')
+        self.timer = QTimer()
+        self.timer.setInterval(100)  # 10 Hz render
+        self.timer.timeout.connect(self.update_plot)
+
+        # Conexiones
+        self.start_btn.clicked.connect(self.start_stream)
+        self.stop_btn.clicked.connect(self.stop_stream)
+        self.save_btn.clicked.connect(self.save_raw)
+        self.back_btn.clicked.connect(self.go_home_callback)
+
+        # buffers para plot
+        self.data_acc = []
+        self.data_gyr = []
+        self.time_buff = []
+
+    def start_stream(self):
+        self.buffer.clear()
+        self.data_acc.clear()
+        self.data_gyr.clear()
+        self.time_buff.clear()
+        if self.simulate:
+            self.timer.start()
+            QMessageBox.information(self, "Simulación", "BLE no disponible: usando simulación.")
             return
-        addr = self.addr_edit.text().strip()
-        uuid = self.uuid_edit.text().strip()
-        if not addr or not uuid:
-            QtWidgets.QMessageBox.warning(self, 'Parámetros', 'Proporciona dirección MAC y UUID')
+        mac = self.mac_input.text().strip()
+        uuid = self.uuid_input.text().strip()
+        if not mac or not uuid:
+            QMessageBox.warning(self, "Parámetros", "Proporciona MAC y UUID.")
             return
-        self.buffer = []
-        self.worker = BLEWorker(addr, uuid)
-        self.worker.sample_signal.connect(self.on_sample)
-        self.worker.status_signal.connect(lambda s: print('[BLE]', s))
+        self.worker = BLEWorker(mac, uuid)
+        self.worker.sample_received.connect(self.on_sample)
+        self.worker.status.connect(lambda s: QMessageBox.information(self, "BLE", s) if "Error" in s else None)
         self.worker.start()
-        self.plot_timer.start()
+        self.timer.start()
 
-    def stop(self):
-        if self.worker is not None:
+    def stop_stream(self):
+        if self.worker:
             self.worker.stop()
-            self.worker.wait(timeout=2000)
+            self.worker.wait(2000)
             self.worker = None
-        self.plot_timer.stop()
-        QtWidgets.QMessageBox.information(self, 'Stop', 'Adquisición detenida. Guarda el crudo si deseas procesarlo.')
+        self.timer.stop()
+        QMessageBox.information(self, "Stop", "Adquisición detenida.")
 
     def on_sample(self, sample: dict):
-        if 'time' not in sample:
-            sample['time'] = time.time()
+        """Recibe muestra y la añade al buffer"""
+        if "time" not in sample:
+            sample["time"] = time.time()
         self.buffer.append(sample)
+        t = sample["time"]
+        ax = sample.get("Acceleration X(g)", np.nan)
+        gx = sample.get("Gyroscope X(deg/s)", np.nan)
+        self.time_buff.append(t)
+        self.data_acc.append(ax)
+        self.data_gyr.append(gx)
+        maxlen = 2000
+        if len(self.time_buff) > maxlen:
+            self.time_buff.pop(0); self.data_acc.pop(0); self.data_gyr.pop(0)
 
     def update_plot(self):
-        if not self.buffer:
+        """Si no hay BLE, simula datos; en cualquiera de los casos actualiza curvas."""
+        if self.simulate:
+            # generar muestra simulada
+            t = time.time()
+            ax = random.uniform(-1.2, 1.2)
+            gx = random.uniform(-200, 200)
+            self.on_sample({
+                "Acceleration X(g)": ax,
+                "Acceleration Y(g)": random.uniform(-1.2, 1.2),
+                "Acceleration Z(g)": random.uniform(-1.2, 1.2),
+                "Gyroscope X(deg/s)": gx,
+                "Gyroscope Y(deg/s)": random.uniform(-200, 200),
+                "Gyroscope Z(deg/s)": random.uniform(-200, 200),
+                "time": t
+            })
+
+        if not self.time_buff:
             return
-        N = 500
-        buf = self.buffer[-N:]
-        times = np.array([s['time'] for s in buf])
-        ax = np.array([s.get('Acceleration X(g)', np.nan) for s in buf])
-        gx = np.array([s.get('Gyroscope X(deg/s)', np.nan) for s in buf])
-        if len(times) >= 2:
-            self.acc_plot.setData(times - times[0], ax)
-            self.gyr_plot.setData(times - times[0], gx)
+        self.acc_curve.setData(self.data_acc)
+        self.gyr_curve.setData(self.data_gyr)
 
     def save_raw(self):
         if not self.buffer:
-            QtWidgets.QMessageBox.warning(self, 'Guardar', 'No hay datos para guardar')
+            QMessageBox.warning(self, "Guardar", "No hay datos para guardar.")
             return
-        fname, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Guardar CSV crudo', filter='CSV Files (*.csv)')
+        fname, _ = QFileDialog.getSaveFileName(self, "Guardar CSV crudo", filter="CSV Files (*.csv)")
         if not fname:
             return
         keys = list(self.buffer[0].keys())
-        with open(fname, 'w', newline='') as f:
+        with open(fname, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=keys)
             writer.writeheader()
             for row in self.buffer:
                 writer.writerow(row)
-        QtWidgets.QMessageBox.information(self, 'Guardado', f'Archivo guardado en {fname}')
-        res = QtWidgets.QMessageBox.question(self, 'Procesar ahora', '¿Procesar el bloque grabado ahora con el pipeline?')
-        if res == QtWidgets.QMessageBox.Yes:
-            df_proc, meta = preprocess_csv(fname, output_path=None)
-            try:
-                df_feat, indices, y_pred, y_proba = run_pipeline_on_processed_df(df_proc)
-                QtWidgets.QMessageBox.information(self, 'Resultado', f'Predicciones: {list(y_pred)}')
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, 'Error pipeline', str(e))
+        QMessageBox.information(self, "Guardado", f"Archivo guardado:\n{fname}")
 
+# ---------------------------
+# Modo C: realtime - tomar ventana cruda -> remuestrear a 100Hz -> extraer top8 -> predecir
+# ---------------------------
+class ModeCWidget(QWidget):
+    def __init__(self, go_home_callback, source_buffer_callable):
+        """
+        source_buffer_callable: callable sin args que retorna la lista buffer (ModeB.buffer)
+        """
+        super().__init__()
+        self.go_home_callback = go_home_callback
+        self.get_source_buffer = source_buffer_callable
 
-class ModeCWidget(QtWidgets.QWidget):
-    """Widget para procesamiento en tiempo real con ventanas deslizantes.
+        self.plot = pg.PlotWidget(title="Acc X (ventana remuestreada a 100Hz)")
+        self.curve = self.plot.plot(pen=pg.mkPen('#48C9B0', width=2))
 
-    - Añade muestras con add_sample(sample_dict)
-    - Usa el modelo en models/k-NN/kNN_8_caracteristicas.joblib por defecto
-    - Las recomendaciones para ventana/overlap se eligen automáticamente según fs estimada
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.label = QtWidgets.QLabel('Clase actual: -')
-        self.conf_label = QtWidgets.QLabel('Confianza: -')
-        self.start_btn = QtWidgets.QPushButton('Start realtime')
-        self.stop_btn = QtWidgets.QPushButton('Stop realtime')
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.addWidget(self.label)
+        self.pred_label = QLabel("Predicción actual: —")
+        self.conf_label = QLabel("Confianza: —")
+        for lbl in [self.pred_label, self.conf_label]:
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet("font-weight:bold;")
+
+        self.start_btn = QPushButton("Start realtime")
+        self.stop_btn = QPushButton("Stop realtime")
+        self.back_btn = QPushButton("⬅️ Volver")
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.stop_btn)
+        btn_layout.addWidget(self.back_btn)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.plot)
+        layout.addWidget(self.pred_label)
         layout.addWidget(self.conf_label)
-        layout.addWidget(self.start_btn)
-        layout.addWidget(self.stop_btn)
-        self.buffer = deque()
-        self.running = False
-        self.timer = QtCore.QTimer()
-        self.timer.setInterval(200)
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+
+        # estado
+        self.timer = QTimer()
+        self.timer.setInterval(200)  # cada 200 ms intenta predecir (latencia adicional pequeña)
         self.timer.timeout.connect(self._on_tick)
-        self.fs = 15.0  # valor asumido por defecto (puedes ajustarlo si sabes la fs real)
-        self.model_path = Path('models/k-NN/kNN_8_caracteristicas.joblib')
         self.model = None
-        self.window_sec = None
-        self.overlap = None
+        self.window_sec = 2.56  # ventana usada en entrenamiento
+        self.overlap = 0.5
         self.window_len = None
+        self.fs_assumed = 15.0  # si no hay timestamps, asumimos 15Hz crudo
+
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
+        self.back_btn.clicked.connect(self.go_home_callback)
 
     def load_model(self):
-        import joblib
-        if not self.model_path.exists():
-            QtWidgets.QMessageBox.critical(self, 'Modelo', f'Modelo no encontrado en {self.model_path}')
+        if not DEFAULT_MODEL_PATH.exists():
+            QMessageBox.critical(self, "Modelo", f"Modelo no encontrado en {DEFAULT_MODEL_PATH}")
             return False
-        self.model = joblib.load(self.model_path)
-        return True
+        try:
+            self.model = joblib.load(DEFAULT_MODEL_PATH)
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "Modelo", f"No se pudo cargar el modelo:\n{e}")
+            return False
 
     def start(self):
         ok = self.load_model()
         if not ok:
             return
-        self.running = True
-        # elegir parámetros de ventana según fs
-        wsec, ov = choose_window_params(self.fs)
-        self.window_sec = wsec
-        self.overlap = ov
-        self.window_len = max(1, int(round(self.window_sec * self.fs)))
+        # calcular window_len en muestras crudas (no necesariamente 100Hz) no es necesario;
+        # para realtime tomamos las últimas muestras que cubran window_sec y luego remuestreamos a 100Hz.
         self.timer.start()
-        QtWidgets.QMessageBox.information(self, 'Realtime', f'Start realtime (fs={self.fs}Hz, ventana={self.window_sec}s, overlap={self.overlap})')
+        QMessageBox.information(self, "Realtime", f"Realtime started (ventana={self.window_sec}s).")
 
     def stop(self):
-        self.running = False
         self.timer.stop()
-
-    def add_sample(self, sample: dict):
-        self.buffer.append(sample)
-        maxlen = int(max(5*self.window_len, 1000))
-        while len(self.buffer) > maxlen:
-            self.buffer.popleft()
+        QMessageBox.information(self, "Realtime", "Realtime detenido")
 
     def _on_tick(self):
-        if not self.running:
+        """
+        Flujo:
+         - leer buffer (lista de dicts)
+         - seleccionar muestras que cubran los últimos self.window_sec segundos
+         - extraer acc_x y tiempos
+         - remuestrear a 100 Hz con resample_window_to_fs
+         - construir df_res con columnas 'time' y 'Acceleration X(g)'
+         - calcular top8 y predecir
+         - actualizar GUI (graf, etiqueta)
+        """
+        buf = self.get_source_buffer()
+        if not buf or len(buf) < 3:
             return
-        if self.window_len is None or len(self.buffer) < self.window_len:
+
+        # estimar fs crudo si hay timestamps
+        times_all = np.array([s.get('time', np.nan) for s in buf], dtype=float)
+        times_valid = times_all[~np.isnan(times_all)]
+        fs_raw = None
+        if len(times_valid) >= 3:
+            dt = np.diff(times_valid)
+            dt = dt[~np.isnan(dt) & (dt > 0)]
+            if len(dt) > 0:
+                fs_raw = float(np.round(1.0 / np.median(dt), 6))
+
+        # seleccionar ventana por tiempo (preferible)
+        last_time = buf[-1].get('time', time.time())
+        if fs_raw is not None:
+            window_raw = [s for s in buf if s.get('time', 0) >= last_time - self.window_sec]
+        else:
+            # fallback: tomar última N muestras aproximadas
+            approx_n = int(round(self.window_sec * self.fs_assumed))
+            window_raw = list(buf[-approx_n:])
+
+        if len(window_raw) < 3:
             return
-        window = list(self.buffer)[-self.window_len:]
-        import pandas as pd
-        wdf = pd.DataFrame(window)
+
+        # construir arrays de tiempo y acc_x a partir de window_raw
+        raw_times = np.array([s.get('time', np.nan) for s in window_raw], dtype=float)
+        acc_x = np.array([s.get('Acceleration X(g)', np.nan) for s in window_raw], dtype=float)
+        # si todos NaN, salir
+        if np.all(np.isnan(acc_x)):
+            return
+
+        # remuestrear a 100Hz
         try:
-            from interfaz.core.top8 import window_df_to_top8
-            feats = window_df_to_top8(wdf)
+            new_t_rel, new_acc = resample_window_to_fs(raw_times, acc_x, target_fs=100.0)
         except Exception as e:
-            print('Error calculando features realtime', e)
-            return
-        X = feats.values.reshape(1, -1)
+            # si falla interpolación, intentar simple rellenado
+            try:
+                # crear vector uniforme de duración ~window_sec con 100Hz
+                duration = raw_times[-1] - raw_times[0] if not np.isnan(raw_times[-1]) and not np.isnan(raw_times[0]) else self.window_sec
+                if duration <= 0:
+                    duration = self.window_sec
+                n = int(round(duration * 100.0)) + 1
+                new_t_rel = np.linspace(0.0, duration, n)
+                new_acc = np.interp(new_t_rel, np.linspace(0.0, duration, len(acc_x)), acc_x)
+            except Exception:
+                return
+
+        # construir df_res compatible con pipeline (time en segundos desde 0)
+        df_res = pd.DataFrame({'time': new_t_rel})
+        df_res['Acceleration X(g)'] = new_acc
+
+        # actualizar gráfico (señal remuestreada)
         try:
+            self.curve.setData(new_t_rel, new_acc)
+        except Exception:
+            self.curve.setData(new_acc)
+
+        # extraer features (top8) y predecir
+        try:
+            feats = window_df_to_top8(df_res, acc_x_col_name='Acceleration X(g)')
+            X = feats.values.reshape(1, -1)
             pred = self.model.predict(X)[0]
             conf = None
             if hasattr(self.model, 'predict_proba'):
@@ -358,45 +564,99 @@ class ModeCWidget(QtWidgets.QWidget):
                     conf = float(np.max(proba))
                 except Exception:
                     conf = None
-            self.label.setText(f'Clase actual: {pred}')
-            self.conf_label.setText(f'Confianza: {conf:.3f}' if conf is not None else 'Confianza: -')
+            self.pred_label.setText(f"Predicción actual: {pred}")
+            self.conf_label.setText(f"Confianza: {conf:.3f}" if conf is not None else "Confianza: -")
         except Exception as e:
-            print('Error predicción realtime', e)
+            # no bloquear GUI: imprimir error en consola
+            print("Error realtime predict:", e)
 
 
-class MainWindow(QtWidgets.QMainWindow):
+# ---------------------------
+# Home y MainWindow
+# ---------------------------
+class HomeScreen(QWidget):
+    def __init__(self, switch_callback):
+        super().__init__()
+        self.switch_callback = switch_callback
+
+        self.logo = QLabel("🦶")
+        self.logo.setAlignment(Qt.AlignCenter)
+        self.logo.setStyleSheet("font-size: 80px;")
+
+        title = QLabel("Sistema de Análisis de Marcha Humana")
+        subtitle = QLabel("Basado en sensores IMU WT901DCL")
+        for lbl in [title, subtitle]:
+            lbl.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 24px; font-weight: bold; color: #6C63FF;")
+        subtitle.setStyleSheet("font-size: 14px; color: #AAAAAA;")
+
+        btnA = QPushButton("🅰️ Modo A - Procesar Archivo")
+        btnB = QPushButton("🅱️ Modo B - Adquisición BLE")
+        btnC = QPushButton("🧠 Modo C - Procesamiento en Tiempo Real")
+
+        for btn, color, idx in zip([btnA, btnB, btnC], ["#6C63FF", "#48C9B0", "#F39C12"], [1, 2, 3]):
+            btn.setStyleSheet(f"background-color: {color}; color: white; padding: 12px; font-weight: bold; border-radius: 10px;")
+            btn.setCursor(QCursor(Qt.PointingHandCursor))
+            btn.clicked.connect(lambda checked, x=idx: self.switch_callback(x))
+
+        footer = QLabel("Desarrollado por Lalo Varela  |  Proyecto de Análisis de Marcha 2025")
+        footer.setAlignment(Qt.AlignCenter)
+        footer.setStyleSheet("color: #666666; font-size: 12px;")
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.logo)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(20)
+        layout.addWidget(btnA)
+        layout.addWidget(btnB)
+        layout.addWidget(btnC)
+        layout.addSpacing(20)
+        layout.addWidget(footer)
+        layout.setAlignment(Qt.AlignCenter)
+        self.setLayout(layout)
+
+
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('Interfaz AVD - IMU')
-        tabs = QtWidgets.QTabWidget()
-        self.mode_a = ModeAWidget()
-        self.mode_b = ModeBWidget()
-        self.mode_c = ModeCWidget()
-        tabs.addTab(self.mode_a, 'Modo A - CSV')
-        tabs.addTab(self.mode_b, 'Modo B - Adquisición BLE')
-        tabs.addTab(self.mode_c, 'Modo C - Realtime')
-        self.setCentralWidget(tabs)
-        # temporizador para pasar muestras del buffer B al C
-        self.timer_connect = QtCore.QTimer()
-        self.timer_connect.setInterval(200)
-        self.timer_connect.timeout.connect(self._connect_buffers)
-        self.timer_connect.start()
+        self.setWindowTitle("Sistema de Análisis de Marcha - WT901DCL")
+        self.resize(1100, 700)
 
-    def _connect_buffers(self):
-        # Si mode_b tiene buffer y mode_c existe, alimentar muestras nuevas
-        if hasattr(self.mode_b, 'buffer') and hasattr(self.mode_c, 'add_sample'):
-            buf = self.mode_b.buffer
-            if buf:
-                for s in buf[-200:]:
-                    self.mode_c.add_sample(s)
+        self.stack = QStackedWidget()
+        self.home = HomeScreen(self.switch_to_mode)
+        # Crear ModeB antes porque ModeC lee su buffer
+        self.modeB = ModeBWidget(self.go_home)
+        self.modeC = ModeCWidget(self.go_home, source_buffer_callable=lambda: self.modeB.buffer)
+        self.modeA = ModeAWidget(self.go_home)
+
+        # Orden de indices: 0-home, 1-modeA, 2-modeB, 3-modeC
+        self.stack.addWidget(self.home)   # 0
+        self.stack.addWidget(self.modeA)  # 1
+        self.stack.addWidget(self.modeB)  # 2
+        self.stack.addWidget(self.modeC)  # 3
+
+        self.setCentralWidget(self.stack)
+
+    def switch_to_mode(self, mode_index):
+        self.stack.setCurrentIndex(mode_index)
+
+    def go_home(self):
+        self.stack.setCurrentIndex(0)
 
 
+# ---------------------------
+# Launch
+# ---------------------------
 def main():
-    app = QtWidgets.QApplication(sys.argv)
-    win = MainWindow()
-    win.show()
+    app = QApplication(sys.argv)
+    if HAS_QDARK:
+        app.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
+    window = MainWindow()
+    window.show()
     sys.exit(app.exec_())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
+# ---------------------------

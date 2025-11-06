@@ -197,7 +197,7 @@ def process_file(filepath, output_dir, target_fs=100, fc_butter=15.0,
         if np.all(np.isnan(series)):
             interp = np.zeros_like(new_times)
         else:
-            series = pd.Series(series).fillna(method='ffill').fillna(method='bfill').to_numpy(dtype=float)
+            series = pd.Series(series).ffill().bfill().to_numpy(dtype=float)
             if not np.all(np.diff(orig_time) >= 0) or len(orig_time) != len(series):
                 orig_time_local = np.linspace(0.0, duration_raw if duration_raw>0 else expected_duration, len(series))
             else:

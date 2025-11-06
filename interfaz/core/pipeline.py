@@ -1,8 +1,6 @@
+# interfaz/core/pipeline.py
 """
-interfaz/core/pipeline.py 
-Pipeline que: toma df procesado (con 'time'), segmenta en ventanas, extrae top8,
- carga el modelo y devuelve features + 
-predicciones.
+Pipeline: ventana y extracción top8 usando la resolución del modelo (100 Hz).
 """
 
 import joblib
@@ -12,23 +10,20 @@ from pathlib import Path
 from interfaz.core.features import sliding_windows
 from interfaz.core.top8 import window_df_to_top8, ORANGE_TOP8
 
-# Ruta por defecto del modelo (la que pediste)
+# modelo por defecto
 DEFAULT_MODEL_PATH = Path("models/k-NN/kNN_8_caracteristicas.joblib")
+MODEL_FS = 100.0  # frecuencia a la que el modelo fue entrenado (según tu comentario)
+MODEL_WINDOW_SEC = 2.56  # ventana de entrenamiento
+MODEL_OVERLAP = 0.5      # overlap por defecto (si quieres 0.5)
 
 def choose_window_params(fs: float):
     """
-    Recomienda (window_sec, overlap) según fs:
-      - fs >= 50: 2.56 s, 0.5
-      - 25 <= fs < 50: 1.92 s, 0.66
-      - fs < 25 (p.ej. 15 Hz): 1.28 s, 0.75
+    Si fs >= 50 -> ventana 2.56 s, overlap 0.5
+    Si 25 <= fs < 50 -> ventana 2.56 s, overlap 0.5 (mantener entrenamiento)
+    Si fs < 25 -> ventana 2.56 s, overlap 0.5 (resamplearemos a 100Hz)
+    En resumen, para compatibilidad con tu entrenamiento usamos siempre 2.56 s.
     """
-    if fs is None:
-        return 2.56, 0.5
-    if fs >= 50.0:
-        return 2.56, 0.5
-    if fs >= 25.0:
-        return 1.92, 0.66
-    return 1.28, 0.75
+    return MODEL_WINDOW_SEC, MODEL_OVERLAP
 
 def run_pipeline_on_processed_df(df_proc: pd.DataFrame,
                                  acc_x_col_name: str = 'Acceleration X(g)',
@@ -36,9 +31,9 @@ def run_pipeline_on_processed_df(df_proc: pd.DataFrame,
                                  overlap: float = None,
                                  model_path: str = None):
     """
-    Ejecuta pipeline:
-    - df_proc: DataFrame procesado (de preprocess_csv) con columna 'time' en segundos
-    - retorna: (df_features, indices, y_pred, y_proba)
+    df_proc: DataFrame que idealmente ya está resampleado a MODEL_FS y filtrado;
+             si no lo está, asumimos que 'time' existe y procederemos.
+    Retorna: df_features (ORANGE_TOP8 + window_center_time), indices, y_pred, y_proba
     """
     if model_path is None:
         model_path = DEFAULT_MODEL_PATH
@@ -47,15 +42,17 @@ def run_pipeline_on_processed_df(df_proc: pd.DataFrame,
         raise FileNotFoundError(f"Modelo no encontrado en {model_path}")
 
     if 'time' not in df_proc.columns:
-        raise ValueError("df_proc debe contener la columna 'time' en segundos")
+        raise ValueError("df_proc debe contener columna 'time' en segundos")
 
     time = df_proc['time'].to_numpy(dtype=float)
     dt = np.diff(time)
-    dt = dt[~np.isnan(dt) & (dt > 0)]
-    fs = 50.0
+    dt = dt[~np.isnan(dt) & (dt>0)]
     if len(dt) > 0:
-        fs = float(np.round(1.0 / np.median(dt), 6))
+        fs = float(np.round(1.0/np.median(dt), 6))
+    else:
+        fs = MODEL_FS  # fuerza fs del modelo si no hay timestamps
 
+    # elegir siempre ventana de entrenamiento salvo que se especifique lo contrario
     if window_sec is None or overlap is None:
         wsec, ov = choose_window_params(fs)
     else:
@@ -64,24 +61,28 @@ def run_pipeline_on_processed_df(df_proc: pd.DataFrame,
     window_samples = int(round(wsec * fs))
     step = int(round(window_samples * (1.0 - ov)))
     if window_samples <= 0 or step <= 0:
-        raise ValueError("Parámetros de ventana inválidos (window_samples o step <= 0)")
+        raise ValueError("Parámetros de ventana inválidos")
 
     feats_rows = []
     indices = []
+    center_times = []
+
     for start, end, wdf in sliding_windows(df_proc, window_samples, step):
         try:
             s = window_df_to_top8(wdf, acc_x_col_name=acc_x_col_name)
         except Exception:
-            s = pd.Series([np.nan] * len(ORANGE_TOP8), index=ORANGE_TOP8)
+            s = pd.Series([np.nan]*len(ORANGE_TOP8), index=ORANGE_TOP8)
         feats_rows.append(s)
         indices.append((start, end))
+        tcenter = float(np.nanmean(df_proc['time'].iloc[start:end].to_numpy(dtype=float)))
+        center_times.append(tcenter)
 
     if len(feats_rows) == 0:
-        raise RuntimeError("No se generaron ventanas. Archivo demasiado corto para la ventana escogida.")
+        raise RuntimeError("No se generaron ventanas.")
 
-    df_feat = pd.DataFrame(feats_rows)
+    df_feat = pd.DataFrame(feats_rows, columns=ORANGE_TOP8)
+    df_feat['window_center_time'] = center_times
 
-    # cargar modelo
     model = joblib.load(model_path)
     X = df_feat[ORANGE_TOP8].values
     y_pred = model.predict(X)
