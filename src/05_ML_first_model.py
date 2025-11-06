@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-04_train_and_eval.py
+05_ML_first_model.py
 Entrena y evalúa modelos (SVM-RBF y k-NN) sobre la matriz de features.
 
 Salida:
@@ -8,8 +7,7 @@ Salida:
 - modelos guardados en models/
 
 Uso:
-python src/05_ML_first_model.py --input_csv datapython/final/All_features.csv --target_col Clase --group_col Sujeto --cv stratified --n_splits 5
-"""
+python src/05_ML_first_model.py --input_csv "data/final/All_features.csv" --target_col Clase --group_col Sujeto --cv stratified --n_splits 5"""
 import argparse
 from pathlib import Path
 import numpy as np

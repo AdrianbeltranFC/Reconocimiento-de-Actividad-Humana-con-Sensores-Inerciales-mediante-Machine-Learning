@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-plot_validation.py
+04_workflow_validation.py
 Comparar señales raw vs processed y visualizar ventanas. Guarda figuras en reports/validation/.
+-Sirve para validar visualmente el procesamiento.
+-Genera estadísticas simples (número de filas, duración) del archivo procesado.
 Uso para carpetas:
 python -u src/04_workflow_validation.py --raw_dir data/raw --processed_dir data/processed --n_examples 5 --fs 100
 """

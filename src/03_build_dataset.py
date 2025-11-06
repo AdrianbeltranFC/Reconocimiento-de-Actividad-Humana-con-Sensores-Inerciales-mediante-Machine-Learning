@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 03_build_dataset.py
-Concatena todos los CSV de features (data/features/.../*_features.csv) en un CSV único:
+Concatena todos los CSV de features (data/features/.../*_features.csv) en un CSV único para crear la matriz de features final.
+- Carga todos los archivos *_features.csv
 - Asegura que las columnas de feature sean coherentes
 - Añade Sujeto y Clase (si faltan)
 - Guarda en data/final/All_features.csv

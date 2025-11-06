@@ -39,14 +39,14 @@ def main():
             print("Preprocessing falló o finalizó con errores, abortando.")
             return
 
-    # Step 2: feature extraction
+    # Step 2: Extracción de features
     cmd2 = [PY, "src/02_feature_extraction.py", "--input_dir", args.processed_dir, "--output_dir", args.features_dir, "--verbose"]
     rc2 = run_cmd(cmd2)
     if rc2 != 0:
         print("Feature extraction falló o finalizó con errores, revisa logs.")
         return
 
-    # Step 3: build dataset
+    # Step 3: Crear el dataset final
     cmd3 = [PY, "src/03_build_dataset.py", "--input_dir", args.features_dir, "--output_file", args.final_csv]
     rc3 = run_cmd(cmd3)
     if rc3 != 0:

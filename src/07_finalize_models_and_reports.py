@@ -4,10 +4,8 @@
 07_finalize_models_and_reports.py
 
 Genera:
-- PNG (matrices de confusión) con títulos en español (por ejemplo:
-  "Métricas para SVM con todas las características",
-  "Métricas para SVM con 8 características").
-- CSV: matriz de confusión y classification report (para reporte).
+- PNG (matrices de confusión) con títulos especificando qué modelo y qué features se usaron (todas vs 8).
+- CSV: matriz de confusión y classification report (usado para el reporte).
 - Modelos finales serializados con nombres claros:
   SVM_todas_caracteristicas.joblib
   SVM_8_caracteristicas.joblib

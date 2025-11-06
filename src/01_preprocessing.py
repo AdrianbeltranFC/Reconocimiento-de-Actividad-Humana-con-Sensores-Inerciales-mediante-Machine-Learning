@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
 """
-01_preprocessing.py (v2)
-- Reconstrucción de tiempos cuando las columnas Time/ChipTime no representan la
+01_preprocessing.py 
+- Reconstrucción de tiempos robusta, incluyendo cuando las columnas Time/ChipTime no representan la
   duración real (p. ej. ChipTime rango << 1s pero hay ~3000 muestras).
 - Añade campos en resumen: raw_nrows, duration_raw, time_method, status.
-- Política: recortar si > expected_duration; rechazar si < tol_lower y pocas muestras.
+- Política: recortar si > expected_duration; rechazar si < tol_lower y pocas muestras. La razón es para
+  evitar que archivos mal grabados con tiempos erróneos afecten la calidad del dataset final.
+- Filtros: Hampel + Butterworth + Savitzky-Golay.
 """
 
 import os, re, argparse
@@ -16,9 +17,7 @@ import pandas as pd
 from scipy.signal import butter, filtfilt, savgol_filter
 from tqdm import tqdm
 
-# -------------------------
-# Helpers
-# -------------------------
+
 def parse_time_column_to_seconds(time_series):
     times = []
     for t in time_series.astype(str).str.strip():
@@ -44,7 +43,6 @@ def infer_time_from_chiptime_column(series, expected_duration=30.0, target_fs=10
     vrange = vmax - vmin
     diffs = np.diff(vals)
     median_diff = float(np.median(np.abs(diffs))) if len(diffs)>0 else 0.0
-    # Caso: rango grande => usar con heurística de unidades
     if vrange >= 1.0:
         if median_diff > 1e6:
             times = (vals - vals[0]) / 1e9
@@ -115,7 +113,6 @@ def process_file(filepath, output_dir, target_fs=100, fc_butter=15.0,
         if lc == "time" or lc.startswith("time") or "time (" in lc: colmap.setdefault('time_col', c)
         if 'chip time' in lc or ('chip' in lc and 'time' in lc): colmap.setdefault('chip_time', c)
 
-    # fallback acc candidates
     acc_candidates = [c for c in cols if 'accel' in c.lower() or 'acceleration' in c.lower() or re.search(r'\bax\b', c.lower())]
     if not any(k in colmap for k in ('acc_x','acc_y','acc_z')) and len(acc_candidates) >= 3:
         colmap['acc_x'], colmap['acc_y'], colmap['acc_z'] = acc_candidates[:3]
@@ -139,7 +136,7 @@ def process_file(filepath, output_dir, target_fs=100, fc_butter=15.0,
             time_seconds = None
 
     if time_seconds is None:
-        # fallback: si la columna time existe pero no parseó, o no hay chip_time,
+        # Si la columna time existe pero no parseó, o no hay chip_time,
         # y si n_rows ~ expected -> reconstruimos; si no, usamos índice y expected_duration
         expected_samples = int(expected_duration * target_fs)
         if n_rows >= 0.8 * expected_samples:

@@ -2,8 +2,8 @@
 """
 02_feature_extraction.py
 Lee los CSV procesados en data/processed/.../*_pipeline.csv
-- Ventana: 2.56 s (por defecto), solapamiento 50%
-- fs por defecto 100 Hz
+- Crea ventanas: 2.56 s con un solapamiento del 50%
+- fs por defecto 100 Hz (dado como se resampleó en preprocessing).
 - Extrae features por ventana para cada canal detectado (acel, gyro, ang)
 - Guarda archivos por sujeto/clase en data/features/<Sujeto>/<Clase>/<archivo>_features.csv
 
@@ -52,7 +52,7 @@ def detect_channel_columns(cols: List[str]) -> Dict[str, str]:
         if "angle z" in lc:
             colmap['ang_z'] = c
 
-    # fallback: if accel names not found, try partial matches
+  
     accel_candidates = [c for c in cols if 'accel' in c.lower() or 'acceleration' in c.lower()]
     if not any(k in colmap for k in ('acc_x','acc_y','acc_z')) and len(accel_candidates) >= 3:
         colmap['acc_x'], colmap['acc_y'], colmap['acc_z'] = accel_candidates[:3]

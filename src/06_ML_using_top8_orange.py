@@ -1,19 +1,27 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+
 """
+06_ML_using_top8_orange.py
+Uso:
 python src/06_ML_using_top8_orange.py --input_csv "data/final/All_features.csv" --n_splits 5 --cv stratified --final_dir "data/final" --reports_dir "reports" --verbose
 
 Script que:
-1) Carga data/final/All_features.csv (o la ruta que indiques)
-2) Selecciona automáticamente las 8 features que definiste (no hace falta pegarlas)
+1) Carga data/final/All_features.csv (la matriz completa de features)
+2) Selecciona automáticamente las 8 features que mejor rankeó Orange:
+   - "Acceleration X(g)_mean"  
+    - "Acceleration X(g)_std"
+    - "Acceleration X(g)_var"
+    - "Acceleration X(g)_median"
+    - "Acceleration X(g)_iqr"
+    - "Acceleration X(g)_rms"
+    - "Acceleration X(g)_ptp"
+    - "Acceleration X(g)_sma"
 3) Guarda la matriz reducida en data/final/All_features_orange_top8.csv
 4) Evalúa modelos (SVM-RBF y kNN) con la matriz ORIGINAL (baseline) y con la REDUCIDA (top8)
 5) Guarda la tabla comparativa en reports/final_comparison.csv y la muestra en consola
 
 Comentarios:
-- Validación por defecto: estratificada (StratifiedKFold n_splits=5). Cambia --cv a "loso" si prefieres LOSO.
+- Validación por defecto: estratificada (StratifiedKFold n_splits=5). Puedes cambiar el tipo de validación usando --cv a "loso" si prefieres LOSO.
 - Si faltan columnas entre las 8, el script te lo notificará y usará las que sí existan.
-- Todo en español y con mensajes claros.
 """
 
 import argparse
