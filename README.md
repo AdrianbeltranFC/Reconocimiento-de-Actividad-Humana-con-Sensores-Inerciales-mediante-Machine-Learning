@@ -11,41 +11,52 @@ Proyecto para clasificación de actividades usando features extraídas de señal
 
 ---
 ##  Tabla de Contenidos
-1. [Descripción](#descripción)
-2. [Estructura del Proyecto](#estructura-del-proyecto)
-3. [Instalación](#instalación)
-4. [Ejecución de Scripts](#ejecución-de-scripts)
-5. [Resultados](#resultados)
+1. [Descripción](#Descripción)
+2. [Estructura del Proyecto](#Organización-del-repositorio-y-descripción-de-las-carpetas)
+3. [Instalación](#Instalación)
+4. [Ejecución de Scripts](#Ejecución-de-scripts)
+5. [Resultados](#Resultados)
+6. [Interpretación](#Interpretación)
+7. [Notas](#Notas)
 
 ##  Descripción
-Sistema de clasificación de actividades usando datos de sensores IMU. Implementa modelos SVM-RBF y k-NN, con selección de características para reducir dimensionalidad manteniendo alto rendimiento.
+Este proyecto implementa un sistema de reconocimiento de actividad humana (HAR) basado en datos provenientes de sensores inerciales (Inertial Measurement Units, IMU). El objetivo es clasificar actividades como caminar, correr y permanecer quieto mediante el análisis de características estadísticas extraídas de señales de aceleración y velocidad angular.
 
-## 📁 Estructura del Proyecto
-```
-AVD_project/
-├── data/
-│   └── final/
-│       ├── All_features.csv              # Dataset completo
-│       └── All_features_orange_top8.csv  # Dataset reducido (8 features)
-├── models/
-│   ├── SVM_todas_caracteristicas.joblib
-│   └── kNN_8_caracteristicas.joblib
-├── reports/
-│   └── final_models/
-│       ├── Métricas para SVM con todas las características.png
-│       ├── Métricas para SVM con 8 características.png
-│       ├── Métricas para k-NN con todas las características.png
-│       ├── Métricas para k-NN con 8 características.png
-│       └── Comparación_baseline_vs_8_caracteristicas.csv
-└── src/
-    ├── 01_preprocessing.py
-    ├── 02_feature_extraction.py
-    ├── 03_feature_selection.py
-    ├── 04_ML_first_model.py
-    ├── 05_ML_using_top8_orange.py
-    ├── 06_feature_selection.py
-    └── 07_finalize_models_and_reports.py
-```
+El flujo completo del sistema abarca desde el preprocesamiento y segmentación de datos crudos, hasta la extracción y selección automática de características, seguido del entrenamiento y evaluación de modelos de aprendizaje automático (SVM-RBF y k-NN).
+
+Asimismo, se incluye una comparación de desempeño entre modelos entrenados con todas las características y aquellos optimizados con las 8 variables más relevantes según el método de selección Orange (top-8 features), demostrando que la reducción de dimensionalidad mantiene una alta precisión con menor complejidad computacional.
+
+## Organización del repositorio y descripción de las carpetas
+
+- `/data/`: Contiene los conjuntos de datos generados en las diferentes etapas del flujo de trabajo.
+    -`/final/`: Archivos CSV utilizados para el entrenamiento y evaluación de los modelos.
+  
+        - `All_features.csv`: Dataset completo con todas las características extraídas
+        
+        - `All_features_orange_top8.csv`: Dataset reducido con las 8 características seleccionadas por relevancia.
+
+- `/models/`: Modelos de aprendizaje automático entrenados.
+    - `SVM_todas_caracteristicas.joblib`: Modelo SVM con todas las características.
+    - `kNN_8_caracteristicas.joblib`: Modelo k-NN entrenado con las 8 características seleccionadas.
+
+- `/reports`: Contiene los reportes visuales y métricas finales de desempeño.
+    - `/final_models/`: Incluye comparaciones de precisión, matrices de confusión y resultados de ambos modelos.
+
+- `/src/`: Scripts principales que implementan el flujo completo del sistema: desde la adquisición y preprocesamiento de datos, hasta la generación de reportes y modelos finales.
+    - `01_preprocessing.py`: Limpieza y segmentación de señales IMU.
+
+    - `02_feature_extraction.py`: Extracción de características estadísticas.
+
+    - `03_feature_selection.py`: Selección automática de características mediante Orange.
+
+    - `04_ML_first_model.py`: Entrenamiento inicial con todas las características.
+
+    - `05_ML_using_top8_orange.py`: Entrenamiento con el conjunto reducido (8 features).
+
+    - `07_finalize_models_and_reports.py`: Cálculo de métricas, generación de reportes y guardado de modelos finale
+ 
+- `/Caracteristicas/`
+    -  `Mejores_Caracteristicas`: Pdf extraido de Orange Data Mining de todas las caracteristicas ordenadas dependiendo su rendimiento de clasificación en base a varios métodos de puntuación.
 
 ##  Instalación
 
@@ -79,7 +90,17 @@ python src/02_feature_extraction.py --processed_dir data/processed --features_di
 python src/07_finalize_models_and_reports.py --input_csv data/final/All_features.csv --reduced_csv data/final/All_features_orange_top8.csv --n_splits 5 --save_models --verbose
 ```
 
-## 📊 Resultados
+## Resultados
+
+### 8 Características Seleccionadas
+1. Acceleration X(g)_mean
+2. Acceleration X(g)_std
+3. Acceleration X(g)_var
+4. Acceleration X(g)_median
+5. Acceleration X(g)_iqr
+6. Acceleration X(g)_rms
+7. Acceleration X(g)_ptp
+8. Acceleration X(g)_sma
 
 ### Comparación de Accuracy entre modelos 
 | Modelo  | Con todas las features | Con 8 features |
@@ -94,20 +115,14 @@ Las matrices de confusión se encuentran en:
 - `reports/final_models/Métricas para k-NN con todas las características.png`
 - `reports/final_models/Métricas para k-NN con 8 características.png`
 
-### 8 Características Seleccionadas
-1. Acceleration X(g)_mean
-2. Acceleration X(g)_std
-3. Acceleration X(g)_var
-4. Acceleration X(g)_median
-5. Acceleration X(g)_iqr
-6. Acceleration X(g)_rms
-7. Acceleration X(g)_ptp
-8. Acceleration X(g)_sma
+### Ejemplo:
+![Ejemplo: Métricas para SVM con 8 características](reports/final_models/M%C3%A9tricas%20para%20SVM%20con%208%20caracter%C3%ADsticas.png)
+
 
 ##  Interpretación
-- La reducción a 8 características mantiene un rendimiento muy parecido al de considerar todas.  (~96% acc)
-- k-NN muestra menor varianza en sus predicciones con features reducidas
-- Las matrices de confusión muestran patrones de error específicos por actividad
+La reducción a ocho características mantiene un rendimiento cercano al 96 %, lo que evidencia que la selección automática de features puede preservar la capacidad predictiva con un modelo más ligero.
+El modelo k-NN muestra menor varianza entre iteraciones al usar el conjunto reducido, mientras que SVM-RBF conserva la mayor precisión general.
+Las matrices de confusión permiten identificar patrones específicos de error por clase, mostrando una alta consistencia en la clasificación de caminar y correr, con ligeras confusiones en las transiciones hacia el estado de quieto.
 
 ##  Notas
-- Las métricas completas están disponibles en los CSVs de reporte (reports)
+- Los reportes completos (CSV y figuras) se encuentran en `reports/final_models/`.
