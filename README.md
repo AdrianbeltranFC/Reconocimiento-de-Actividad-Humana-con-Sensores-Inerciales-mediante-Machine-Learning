@@ -43,20 +43,23 @@ Asimismo, se incluye una comparación de desempeño entre modelos entrenados con
     - `/final_models/`: Incluye comparaciones de precisión, matrices de confusión y resultados de ambos modelos.
 
 - `/src/`: Scripts principales que implementan el flujo completo del sistema: desde la adquisición y preprocesamiento de datos, hasta la generación de reportes y modelos finales.
-    - `01_preprocessing.py`: Limpieza y segmentación de señales IMU.
+    - `01_preprocessing.py`: Limpieza y filtrado de las señales IMU.
 
-    - `02_feature_extraction.py`: Extracción de características estadísticas.
+    - `02_feature_extraction.py`: Extracción de características en tiempo y frecuencia.
 
-    - `03_feature_selection.py`: Selección automática de características mediante Orange.
+    - `03_build_dataset.py`: Concatena todos los datos en una sola matriz de features. 
 
-    - `04_ML_first_model.py`: Entrenamiento inicial con todas las características.
+    -  `04_workflow_validation.py`: Compara las señales crudas con las procesadas para validar visualmente el preprocesamiento del dataset. 
 
-    - `05_ML_using_top8_orange.py`: Entrenamiento con el conjunto reducido (8 features).
+    - `05_ML_first_model.py`: Entrenamiento de modelos con todas las características (entrena 2 modelos: KNN y SVM)
 
-    - `07_finalize_models_and_reports.py`: Cálculo de métricas, generación de reportes y guardado de modelos finale
+    - `06_ML_using_top8_orange.py`: Entrenamiento de modelos con el conjunto de caracteristicas reducido por el ranking de orange (8 features).
+
+    - `07_finalize_models_and_reports.py`: Cálculo de métricas, generación de reportes y guardado de modelos finales.
  
-- `/Caracteristicas/`
-    -  `Mejores_Caracteristicas`: Pdf extraido de Orange Data Mining de todas las caracteristicas ordenadas dependiendo su rendimiento de clasificación en base a varios métodos de puntuación.
+    - `/Caracteristicas/`
+
+    -  `Mejores_Caracteristicas`: Pdf extraido de Orange Data Mining de todas las caracteristicas ordenadas dependiendo su rendimiento de clasificación en base a varios métodos de puntuación. De acuerdo a este ranking se eligieron los 8 features utilizados para entrenar los modelos del script 07. 
 
 ##  Instalación
 
@@ -79,13 +82,14 @@ pip install pandas numpy scikit-learn matplotlib seaborn joblib tqdm
 
 ##  Ejecución de Scripts
 
-### 1. Preprocesamiento y Extracción (opcional si ya tienes los CSVs)
+### 1. Preprocesamiento, extracción de características y creación de la matriz de características. 
 ```powershell
-python src/01_preprocessing.py --input_raw data/raw --processed_dir data/processed
-python src/02_feature_extraction.py --processed_dir data/processed --features_dir data/features
+python src/01_preprocessing.py --input_dir data/raw --output_dir data/processed --target_fs 100
+python src/02_feature_extraction.py --input_dir data/processed --output_dir data/features
+python src/03_build_dataset.py --input_dir data/features --output_file data/final/All_features.csv
 ```
 
-### 2. Generar Modelos y Reportes Finales
+### 2. Generar Modelos y Reportes Finales.
 ```powershell
 python src/07_finalize_models_and_reports.py --input_csv data/final/All_features.csv --reduced_csv data/final/All_features_orange_top8.csv --n_splits 5 --save_models --verbose
 ```
