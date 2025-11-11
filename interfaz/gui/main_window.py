@@ -10,6 +10,9 @@ Interfaz principal para AVDs con sensores inerciales.
 
 Uso:
     python -m interfaz.gui.main_window
+
+    Recuerda activar el entorno virtual con las dependencias necesarias:
+    .\venv\Scripts\activate
 """
 
 import sys
