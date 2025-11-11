@@ -1,23 +1,14 @@
 # interfaz/gui/main_window.py
 """
-Interfaz principal para AVDs con sensores inerciales.
-
-- Modo A: cargar CSV -> preprocesado coherente con el entrenamiento (100 Hz) ->
-          segmentación en ventanas (2.56 s) -> extracción top8 -> predicción por ventana ->
-          graficar y guardar diagnósticos.
-- Modo B: adquisición BLE (o simulación) -> buffer -> guardar CSV crudo.
-- Modo C: realtime -> toma ventana cruda -> remuestrea a 100 Hz -> extrae top8 -> predecir.
-
-Uso:
-    python -m interfaz.gui.main_window
+Interfaz actualizada: 3 gráficas (Aceleración, Velocidad angular, Ángulos) + tabla + guardado CSV.
+Con parsing WT901 (20 bytes), parse ASCII y parser del repo (si existe).
 """
-
 import sys
 import time
 import csv
 import threading
 import asyncio
-from collections import Counter, deque
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional, List
 from datetime import datetime
@@ -56,12 +47,12 @@ import joblib
 import numpy as np
 import pandas as pd
 
-# Defaults (fijo el scanner/dir que pediste)
+# Defaults
 DEFAULT_BLE_MAC = "eb:33:2e:f9:57:b5"
-READ_CHAR_UUID = "0000ffe4-0000-1000-8000-00805f9a34fb"  # fallback notify
+READ_CHAR_UUID = "0000ffe4-0000-1000-8000-00805f9a34fb"
 DEFAULT_MODEL_PATH = Path("models/k-NN/kNN_8_caracteristicas.joblib")
 
-# CSV full headers you specified (we'll write these columns, some may be empty)
+# CSV headers requested
 CSV_HEADERS = [
     "ime", "Device name", "Chip Time()", "Acceleration X(g)", "Acceleration Y(g)", "Acceleration Z(g)",
     "Angular velocity X(°/s)", "Angular velocity Y(°/s)", "Angular velocity Z(°/s)",
@@ -70,7 +61,6 @@ CSV_HEADERS = [
 ]
 
 
-# ---------- Utilities ----------
 def try_float(x: Any) -> Optional[float]:
     try:
         return float(x)
@@ -86,17 +76,11 @@ def format_time(t: float) -> str:
         return str(t)
 
 
-# ---------- WT901 binary parser (like DeviceModel.process_data) ----------
+# WT901 binary parser (20-byte frame)
 def parse_wt901_frame(frame_bytes: bytes) -> Optional[Dict[str, Any]]:
-    """
-    Parse a 20-byte WT901-like frame (as in your DeviceModel).
-    Returns a dict with numeric fields: Ax,Ay,Az,Gx,Gy,Gz,AngX,AngY,AngZ
-    Uses same scaling factors you used in your DeviceModel example.
-    """
     if len(frame_bytes) < 20:
         return None
     b = frame_bytes
-    # Check second byte marker 0x61 (like your code)
     try:
         if b[1] != 0x61:
             return None
@@ -120,43 +104,25 @@ def parse_wt901_frame(frame_bytes: bytes) -> Optional[Dict[str, Any]]:
         ang_z = get_signed_int16((b[19] << 8) | b[18]) / 32768.0 * 180.0
 
         return {
-            "Ax": round(ax, 6),
-            "Ay": round(ay, 6),
-            "Az": round(az, 6),
-            "Gx": round(gx, 6),
-            "Gy": round(gy, 6),
-            "Gz": round(gz, 6),
-            "AngX": round(ang_x, 6),
-            "AngY": round(ang_y, 6),
-            "AngZ": round(ang_z, 6)
+            "Ax": round(ax, 6), "Ay": round(ay, 6), "Az": round(az, 6),
+            "Gx": round(gx, 6), "Gy": round(gy, 6), "Gz": round(gz, 6),
+            "AngX": round(ang_x, 6), "AngY": round(ang_y, 6), "AngZ": round(ang_z, 6)
         }
     except Exception:
         return None
 
 
-# ---------- Normalizer: produce dict compatible with GUI/CSV ----------
+# Normalize parser output to CSV_HEADERS + timestamp numeric key
 def normalize_parsed(parsed: Dict[str, Any], state: Dict[str, Any], device_name: str = "") -> Dict[str, Any]:
-    """
-    parsed: dict that may contain Ax/Ay/Az, Gx/Gy/Gz, AngX/AngY/AngZ, time/DeltaTime, or ascii ax, etc.
-    state: mutable dict with 'last_time' for DeltaTime accumulation
-    device_name: string to include in sample
-    Returns a dict with keys matching CSV_HEADERS.
-    """
     out = {h: "" for h in CSV_HEADERS}
-    # ime -> formatted local time (use time.time() or chip time if provided)
+    # timestamp handling
     t_abs = None
-    # accept multiple time-like keys
     if "time" in parsed:
         t_abs = try_float(parsed.get("time"))
     elif "timestamp" in parsed:
         t_abs = try_float(parsed.get("timestamp"))
-    elif "Chip Time" in parsed:
-        # if chip time string present, try parse (may be already formatted)
-        try:
-            t_abs = None
-            out["Chip Time()"] = parsed.get("Chip Time")
-        except Exception:
-            pass
+    elif "Chip Time()" in parsed and parsed.get("Chip Time()"):
+        out["Chip Time()"] = parsed.get("Chip Time()")
     elif "DeltaTime" in parsed:
         dt = try_float(parsed.get("DeltaTime"))
         if dt is not None:
@@ -164,21 +130,14 @@ def normalize_parsed(parsed: Dict[str, Any], state: Dict[str, Any], device_name:
                 state["last_time"] = time.time() - dt
             state["last_time"] = state["last_time"] + dt
             t_abs = state["last_time"]
+
     if t_abs is None:
         t_abs = time.time()
-        state["last_time"] = t_abs
-
+    state["last_time"] = t_abs
     out["ime"] = format_time(t_abs)
     out["Device name"] = device_name or parsed.get("Device name", "")
-    if "Chip Time()" not in out or out["Chip Time()"] == "":
-        # if parsed includes chiptime-like
-        if "chip_time" in parsed:
-            out["Chip Time()"] = parsed.get("chip_time")
-        elif "ChipTime" in parsed:
-            out["Chip Time()"] = parsed.get("ChipTime")
 
-    # acceleration / gyro / angle keys mapping
-    # acceleration
+    # Map acceleration / gyro / angles
     ax = parsed.get("Acceleration X(g)") or parsed.get("Ax") or parsed.get("ax") or parsed.get("AccX")
     ay = parsed.get("Acceleration Y(g)") or parsed.get("Ay") or parsed.get("ay") or parsed.get("AccY")
     az = parsed.get("Acceleration Z(g)") or parsed.get("Az") or parsed.get("az") or parsed.get("AccZ")
@@ -189,7 +148,6 @@ def normalize_parsed(parsed: Dict[str, Any], state: Dict[str, Any], device_name:
     angy = parsed.get("AngY") or parsed.get("Angle Y(°)") or parsed.get("Angle Y")
     angz = parsed.get("AngZ") or parsed.get("Angle Z(°)") or parsed.get("Angle Z")
 
-    # robust conversion
     def fmt_val(v):
         vv = try_float(v)
         return "" if vv is None else f"{vv:.6g}"
@@ -204,17 +162,19 @@ def normalize_parsed(parsed: Dict[str, Any], state: Dict[str, Any], device_name:
     out["Angle Y(°)"] = fmt_val(angy)
     out["Angle Z(°)"] = fmt_val(angz)
 
-    # Shift/Speed remain empty if not provided
+    # Shift/Speed optional
     for k in ["ShiftX(mm)", "ShiftY(mm)", "ShiftZ(mm)", "SpeedX(mm/s)", "SpeedY(mm/s)", "SpeedZ(mm/s)"]:
         if parsed.get(k) is not None:
             out[k] = fmt_val(parsed.get(k))
 
+    # keep numeric timestamp for plotting
+    out["timestamp"] = t_abs
     return out
 
 
-# ---------- Async BLE client (maintains loop in thread) ----------
+# Async BLE client like previous version
 class AsyncBLEClient(QObject):
-    sample_received = pyqtSignal(dict)  # emits either {'raw_bytes': b'...'} or parsed dict
+    sample_received = pyqtSignal(dict)
     status = pyqtSignal(str)
 
     def __init__(self):
@@ -320,7 +280,6 @@ class AsyncBLEClient(QObject):
                 self._client = None
                 return
 
-            # find notify characteristic
             notify_char = None
             if notify_uuid:
                 for svc in services:
@@ -334,7 +293,6 @@ class AsyncBLEClient(QObject):
                     if notify_char:
                         break
             if notify_char is None:
-                # pick first notify
                 for svc in services:
                     for ch in getattr(svc, "characteristics", []):
                         props = getattr(ch, "properties", None)
@@ -360,7 +318,6 @@ class AsyncBLEClient(QObject):
                 return
 
             def _notify_cb(sender, data: bytearray):
-                # try repo parser if available
                 sample = None
                 if self._repo_parser is not None:
                     try:
@@ -368,13 +325,11 @@ class AsyncBLEClient(QObject):
                     except Exception:
                         sample = None
                 if sample is not None and isinstance(sample, dict):
-                    # emit parsed dict (no normalization here)
                     try:
                         self.sample_received.emit(sample)
                     except Exception:
                         pass
                     return
-                # try ASCII CSV "ax,ay,az,gx,gy,gz"
                 try:
                     s = data.decode("utf-8").strip()
                     parts = s.split(",")
@@ -392,7 +347,6 @@ class AsyncBLEClient(QObject):
                         return
                 except Exception:
                     pass
-                # fallback: emit raw bytes in dict
                 try:
                     self.sample_received.emit({"raw_bytes": bytes(data)})
                 except Exception:
@@ -401,7 +355,6 @@ class AsyncBLEClient(QObject):
             await client.start_notify(str(notify_char), _notify_cb)
             self.status.emit(f"Notify iniciado en {notify_char}")
 
-            # stay connected
             while True:
                 await asyncio.sleep(0.5)
                 try:
@@ -421,12 +374,11 @@ class AsyncBLEClient(QObject):
             return
 
 
-# ---------- Mode A (unchanged core functionality) ----------
+# Mode A (unchanged)
 class ModeAWidget(QWidget):
     def __init__(self, go_home_callback):
         super().__init__()
         self.go_home_callback = go_home_callback
-        # UI same as before (minimal changes)
         self.load_btn = QPushButton("📂 Importar archivo (.csv)")
         self.proc_btn = QPushButton("⚙️ Procesar archivo (para modelo)")
         self.back_btn = QPushButton("⬅️ Volver")
@@ -598,7 +550,7 @@ class ModeAWidget(QWidget):
             QMessageBox.critical(self, "Error", f"Error procesando archivo:\n{e}")
 
 
-# ---------- Mode B (BLE acquisition, parsing, normalization, UI) ----------
+# Mode B with 3 plots
 class ModeBWidget(QWidget):
     def __init__(self, go_home_callback):
         super().__init__()
@@ -612,16 +564,35 @@ class ModeBWidget(QWidget):
         self.save_btn = QPushButton("💾 Guardar datos")
         self.back_btn = QPushButton("⬅️ Volver")
 
-        # plot
-        self.plot = pg.PlotWidget(title="Señales en tiempo real (AccX / GyrX)")
-        self.plot.showGrid(x=True, y=True)
-        self.acc_curve = self.plot.plot(pen=pg.mkPen('#6C63FF', width=2), name='AccX')
-        self.gyr_curve = self.plot.plot(pen=pg.mkPen('#F39C12', width=2), name='GyrX')
+        # left: three stacked plots
+        self.acc_plot = pg.PlotWidget(title="Aceleraciones (X, Y, Z) [g]")
+        self.gyro_plot = pg.PlotWidget(title="Velocidad Angular (X, Y, Z) [°/s]")
+        self.ang_plot = pg.PlotWidget(title="Ángulos (X, Y, Z) [°]")
 
-        # table
+        # create 3 curves each
+        self.acc_curves = {
+            'x': self.acc_plot.plot(pen=pg.mkPen('#6C63FF', width=1.5)),
+            'y': self.acc_plot.plot(pen=pg.mkPen('#48C9B0', width=1.5)),
+            'z': self.acc_plot.plot(pen=pg.mkPen('#F39C12', width=1.5))
+        }
+        self.gyro_curves = {
+            'x': self.gyro_plot.plot(pen=pg.mkPen('#6C63FF', width=1.5)),
+            'y': self.gyro_plot.plot(pen=pg.mkPen('#48C9B0', width=1.5)),
+            'z': self.gyro_plot.plot(pen=pg.mkPen('#F39C12', width=1.5))
+        }
+        self.ang_curves = {
+            'x': self.ang_plot.plot(pen=pg.mkPen('#6C63FF', width=1.5)),
+            'y': self.ang_plot.plot(pen=pg.mkPen('#48C9B0', width=1.5)),
+            'z': self.ang_plot.plot(pen=pg.mkPen('#F39C12', width=1.5))
+        }
+
+        for p in (self.acc_plot, self.gyro_plot, self.ang_plot):
+            p.showGrid(x=True, y=True)
+            p.setLabel('bottom', 'Tiempo (s)')
+
+        # table on right
         self.table = QTableWidget()
-        # show selected columns in UI (ime, Device name, AccX.. Gyr.. Ang..)
-        self.ui_columns = ["ime", "Device name", "Acceleration X(g)", "Acceleration Y(g)", "Acceleration Z(g)",
+        self.ui_columns = ["ime", "Device name", "Chip Time()", "Acceleration X(g)", "Acceleration Y(g)", "Acceleration Z(g)",
                            "Angular velocity X(°/s)", "Angular velocity Y(°/s)", "Angular velocity Z(°/s)",
                            "Angle X(°)", "Angle Y(°)", "Angle Z(°)"]
         self.table.setColumnCount(len(self.ui_columns))
@@ -645,19 +616,26 @@ class ModeBWidget(QWidget):
         btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.back_btn)
 
+        left_plots_layout = QVBoxLayout()
+        left_plots_layout.addWidget(self.acc_plot, 1)
+        left_plots_layout.addWidget(self.gyro_plot, 1)
+        left_plots_layout.addWidget(self.ang_plot, 1)
+
         center_layout = QHBoxLayout()
-        center_layout.addWidget(self.plot, 2)
+        left_widget = QWidget()
+        left_widget.setLayout(left_plots_layout)
+        center_layout.addWidget(left_widget, 2)
         center_layout.addWidget(self.table, 1)
 
-        layout = QVBoxLayout()
-        layout.addWidget(conn_group)
-        layout.addLayout(btn_layout)
-        layout.addLayout(center_layout)
-        self.setLayout(layout)
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(conn_group)
+        main_layout.addLayout(btn_layout)
+        main_layout.addLayout(center_layout)
+        self.setLayout(main_layout)
 
         # state
         self.ble_client = None
-        self.normalized_buffer: List[Dict[str, Any]] = []  # stores normalized rows matching CSV_HEADERS
+        self.normalized_buffer: List[Dict[str, Any]] = []
         self.simulate = not HAS_BLEAK
 
         self.timer = QTimer()
@@ -669,36 +647,27 @@ class ModeBWidget(QWidget):
         self.save_btn.clicked.connect(self.save_raw)
         self.back_btn.clicked.connect(self.go_home_callback)
 
-        # plotting buffers
+        # plotting data lists
         self.time_buff: List[float] = []
-        self.data_acc: List[float] = []
-        self.data_gyr: List[float] = []
+        self.acc_x: List[float] = []
+        self.acc_y: List[float] = []
+        self.acc_z: List[float] = []
+        self.gyro_x: List[float] = []
+        self.gyro_y: List[float] = []
+        self.gyro_z: List[float] = []
+        self.ang_x: List[float] = []
+        self.ang_y: List[float] = []
+        self.ang_z: List[float] = []
 
-        # normalization state (for DeltaTime)
         self._norm_state = {"last_time": None}
 
     def _on_status(self, text: str):
         print("[BLE status]", text)
-        # avoid popup spam; show only critical
-        if "Error" in text or "No pude" in text or "No encontr" in text:
-            QMessageBox.critical(self, "BLE", text)
-        else:
-            # small info - print only
-            # QMessageBox.information(self, "BLE", text)
-            pass
 
     def _on_sample_emitted(self, sample: Dict[str, Any]):
-        """
-        sample can be:
-         - dict with parsed keys (Ax/Ay/etc.)
-         - dict with 'raw_bytes': b'...'
-         - dict with ascii parsed keys (Acceleration X(g) etc.)
-        """
         try:
-            # case: raw bytes produced by AsyncBLEClient
             if "raw_bytes" in sample:
                 b = sample["raw_bytes"]
-                # try chunking into 20-byte frames and parse first valid
                 parsed_frame = None
                 for i in range(0, len(b) - 19, 1):
                     chunk = b[i:i+20]
@@ -707,61 +676,80 @@ class ModeBWidget(QWidget):
                         parsed_frame = pf
                         break
                 if parsed_frame is None:
-                    # nothing parsed from binary -> ignore
                     return
-                # parsed_frame keys: Ax,Ay,Az,Gx,Gy,Gz,AngX,AngY,AngZ
-                # build normalized dict form expected by normalize_parsed
                 parsed = {
                     "Ax": parsed_frame["Ax"], "Ay": parsed_frame["Ay"], "Az": parsed_frame["Az"],
                     "Gx": parsed_frame["Gx"], "Gy": parsed_frame["Gy"], "Gz": parsed_frame["Gz"],
-                    "AngX": parsed_frame["AngX"], "AngY": parsed_frame["AngY"], "AngZ": parsed_frame["AngZ"],
-                    # no chip time in this frame; we use DeltaTime if available in parsing upstream (not here)
+                    "AngX": parsed_frame["AngX"], "AngY": parsed_frame["AngY"], "AngZ": parsed_frame["AngZ"]
                 }
-                # normalize and append
                 normalized = normalize_parsed(parsed, self._norm_state, device_name=self.mac_input.text().strip())
                 self._append_normalized(normalized)
                 return
 
-            # case: already parsed dict (possibly repo parser or ascii)
-            # normalize directly (we give device name)
             normalized = normalize_parsed(sample, self._norm_state, device_name=self.mac_input.text().strip())
             self._append_normalized(normalized)
         except Exception as e:
             print("Error handling sample:", e)
 
     def _append_normalized(self, normalized_row: Dict[str, Any]):
-        # maintain buffer
+        # ensure numeric timestamp exists
+        tnum = normalized_row.get("timestamp")
+        if tnum is None:
+            tnum = self._norm_state.get("last_time", time.time())
+            normalized_row["timestamp"] = tnum
+
         self.normalized_buffer.append(normalized_row)
         if len(self.normalized_buffer) > 20000:
             self.normalized_buffer.pop(0)
 
-        # update plot arrays (use AccX and GyrX)
+        # append to plotting arrays converting strings -> floats
         try:
-            # parse ime back to timestamp for plotting approx (we stored ime as string though)
-            # for plotting we use internal state last_time stored in _norm_state
-            t = self._norm_state.get("last_time", time.time())
-            ax_s = normalized_row.get("Acceleration X(g)", "")
-            gx_s = normalized_row.get("Angular velocity X(°/s)", "")
-            ax = try_float(ax_s) if ax_s != "" else np.nan
-            gx = try_float(gx_s) if gx_s != "" else np.nan
+            t = float(normalized_row.get("timestamp", time.time()))
+            ax = try_float(normalized_row.get("Acceleration X(g)")) if normalized_row.get("Acceleration X(g)") != "" else np.nan
+            ay = try_float(normalized_row.get("Acceleration Y(g)")) if normalized_row.get("Acceleration Y(g)") != "" else np.nan
+            az = try_float(normalized_row.get("Acceleration Z(g)")) if normalized_row.get("Acceleration Z(g)") != "" else np.nan
+            gx = try_float(normalized_row.get("Angular velocity X(°/s)")) if normalized_row.get("Angular velocity X(°/s)") != "" else np.nan
+            gy = try_float(normalized_row.get("Angular velocity Y(°/s)")) if normalized_row.get("Angular velocity Y(°/s)") != "" else np.nan
+            gz = try_float(normalized_row.get("Angular velocity Z(°/s)")) if normalized_row.get("Angular velocity Z(°/s)") != "" else np.nan
+            angx = try_float(normalized_row.get("Angle X(°)")) if normalized_row.get("Angle X(°)") != "" else np.nan
+            angy = try_float(normalized_row.get("Angle Y(°)")) if normalized_row.get("Angle Y(°)") != "" else np.nan
+            angz = try_float(normalized_row.get("Angle Z(°)")) if normalized_row.get("Angle Z(°)") != "" else np.nan
 
             self.time_buff.append(t)
-            self.data_acc.append(ax if ax is not None else np.nan)
-            self.data_gyr.append(gx if gx is not None else np.nan)
-            if len(self.time_buff) > 5000:
-                self.time_buff.pop(0); self.data_acc.pop(0); self.data_gyr.pop(0)
+            self.acc_x.append(ax); self.acc_y.append(ay); self.acc_z.append(az)
+            self.gyro_x.append(gx); self.gyro_y.append(gy); self.gyro_z.append(gz)
+            self.ang_x.append(angx); self.ang_y.append(angy); self.ang_z.append(angz)
 
-            # update plot (relative)
-            t0 = self.time_buff[0] if self.time_buff else t
-            x = [tt - t0 for tt in self.time_buff]
-            self.acc_curve.setData(x, self.data_acc)
-            self.gyr_curve.setData(x, self.data_gyr)
-            if x:
-                self.plot.setXRange(max(0, x[-1] - 5), x[-1])
+            maxlen = 5000
+            if len(self.time_buff) > maxlen:
+                for lst in (self.time_buff, self.acc_x, self.acc_y, self.acc_z,
+                            self.gyro_x, self.gyro_y, self.gyro_z,
+                            self.ang_x, self.ang_y, self.ang_z):
+                    lst.pop(0)
+
+            # plot with relative time
+            try:
+                t0 = self.time_buff[0]
+                x = [tt - t0 for tt in self.time_buff]
+                self.acc_curves['x'].setData(x, self.acc_x)
+                self.acc_curves['y'].setData(x, self.acc_y)
+                self.acc_curves['z'].setData(x, self.acc_z)
+                self.gyro_curves['x'].setData(x, self.gyro_x)
+                self.gyro_curves['y'].setData(x, self.gyro_y)
+                self.gyro_curves['z'].setData(x, self.gyro_z)
+                self.ang_curves['x'].setData(x, self.ang_x)
+                self.ang_curves['y'].setData(x, self.ang_y)
+                self.ang_curves['z'].setData(x, self.ang_z)
+                if x:
+                    self.acc_plot.setXRange(max(0, x[-1] - 5), x[-1])
+                    self.gyro_plot.setXRange(max(0, x[-1] - 5), x[-1])
+                    self.ang_plot.setXRange(max(0, x[-1] - 5), x[-1])
+            except Exception:
+                pass
         except Exception as e:
-            print("Plot update error:", e)
+            print("Plot append error:", e)
 
-        # update table with last N normalized rows (show only UI columns)
+        # update table
         try:
             display_rows = self.normalized_buffer[-self.max_table_rows:]
             self.table.setRowCount(len(display_rows))
@@ -774,11 +762,11 @@ class ModeBWidget(QWidget):
             print("Table update error:", e)
 
     def start_stream(self):
-        # clear buffers/state
         self.normalized_buffer.clear()
-        self.time_buff.clear()
-        self.data_acc.clear()
-        self.data_gyr.clear()
+        for lst in (self.time_buff, self.acc_x, self.acc_y, self.acc_z,
+                    self.gyro_x, self.gyro_y, self.gyro_z,
+                    self.ang_x, self.ang_y, self.ang_z):
+            lst.clear()
         self._norm_state = {"last_time": None}
 
         if self.simulate:
@@ -792,7 +780,6 @@ class ModeBWidget(QWidget):
             QMessageBox.warning(self, "Parámetros", "Proporciona MAC o nombre del dispositivo y UUID.")
             return
 
-        # start BLE client
         self.ble_client = AsyncBLEClient()
         self.ble_client.sample_received.connect(self._on_sample_emitted)
         self.ble_client.status.connect(self._on_status)
@@ -807,7 +794,6 @@ class ModeBWidget(QWidget):
         QMessageBox.information(self, "Stop", "Adquisición detenida.")
 
     def update_plot(self):
-        # simulator path for testing without BLE
         if self.simulate:
             t = time.time()
             samp = {
@@ -819,20 +805,27 @@ class ModeBWidget(QWidget):
                 "Gyroscope Z(deg/s)": np.random.uniform(-200, 200),
                 "time": t
             }
-            self._on_sample_emitted(samp)
+            normalized = normalize_parsed(samp, self._norm_state, device_name=self.mac_input.text().strip())
+            self._append_normalized(normalized)
             return
 
-        # when real BLE: live updates performed in callback; here keep plot in sync
+        # For real BLE, callback already updates UI. keep plots in sync if needed
         if not self.time_buff:
             return
         try:
             t0 = self.time_buff[0]
             x = [tt - t0 for tt in self.time_buff]
-            self.acc_curve.setData(x, self.data_acc)
-            self.gyr_curve.setData(x, self.data_gyr)
+            self.acc_curves['x'].setData(x, self.acc_x)
+            self.acc_curves['y'].setData(x, self.acc_y)
+            self.acc_curves['z'].setData(x, self.acc_z)
+            self.gyro_curves['x'].setData(x, self.gyro_x)
+            self.gyro_curves['y'].setData(x, self.gyro_y)
+            self.gyro_curves['z'].setData(x, self.gyro_z)
+            self.ang_curves['x'].setData(x, self.ang_x)
+            self.ang_curves['y'].setData(x, self.ang_y)
+            self.ang_curves['z'].setData(x, self.ang_z)
         except Exception:
-            self.acc_curve.setData(self.data_acc)
-            self.gyr_curve.setData(self.data_gyr)
+            pass
 
     def save_raw(self):
         if not self.normalized_buffer:
@@ -848,7 +841,6 @@ class ModeBWidget(QWidget):
                 writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
                 writer.writeheader()
                 for row in self.normalized_buffer:
-                    # ensure row has all keys
                     out = {k: row.get(k, "") for k in CSV_HEADERS}
                     writer.writerow(out)
             QMessageBox.information(self, "Guardado", f"Archivo guardado:\n{fname}")
@@ -856,7 +848,7 @@ class ModeBWidget(QWidget):
             QMessageBox.critical(self, "Error guardar", f"No se pudo guardar CSV:\n{e}")
 
 
-# ---------- Mode C (same logic as before; uses ModeB.normalized_buffer) ----------
+# Mode C (uses ModeB.normalized_buffer)
 class ModeCWidget(QWidget):
     def __init__(self, go_home_callback, source_buffer_callable):
         super().__init__()
@@ -926,34 +918,19 @@ class ModeCWidget(QWidget):
         buf = self.get_source_buffer()
         if not buf or len(buf) < 3:
             return
-        # buf elements are dict rows (CSV_HEADERS)
-        times = []
-        acc_x = []
-        for r in buf:
-            t_str = r.get("ime", "")
-            # we can't reliably parse the displayed ime string back; better to use stored last_time in ModeB state,
-            # but ModeC will attempt reasonable fallback: use index spacing
-            try:
-                # not ideal; skip exact parsing here
-                pass
-            except Exception:
-                pass
-        # For simplicity: build acc_x by reading Acc X(g) numeric values
         acc_vals = []
         time_vals = []
-        for r in buf:
+        for i, r in enumerate(buf):
             ax = try_float(r.get("Acceleration X(g)")) if r.get("Acceleration X(g)") != "" else np.nan
             acc_vals.append(ax)
-            # use running index
-            time_vals.append(len(time_vals) / self.fs_assumed)
+            # time fallback: use index / fs_assumed
+            time_vals.append(i / self.fs_assumed)
         acc_vals = np.array(acc_vals, dtype=float)
         if np.all(np.isnan(acc_vals)):
             return
-        # take last window approximated
         try:
             sampled = acc_vals[-int(self.window_sec * self.fs_assumed):]
             t_rel = np.linspace(0, len(sampled)/self.fs_assumed, num=len(sampled))
-            # resample to 100Hz
             new_t_rel, new_acc = resample_window_to_fs(np.array(t_rel), sampled, target_fs=100.0)
             self.curve.setData(new_t_rel, new_acc)
         except Exception:
@@ -963,13 +940,12 @@ class ModeCWidget(QWidget):
                 pass
 
 
-# ---------- Home & MainWindow ----------
 class HomeScreen(QWidget):
     def __init__(self, switch_callback):
         super().__init__()
         self.switch_callback = switch_callback
         self.logo = QLabel("🦶"); self.logo.setAlignment(Qt.AlignCenter); self.logo.setStyleSheet("font-size: 80px;")
-        title = QLabel("Sistema de Análisis de la Marcha Humana"); subtitle = QLabel("Basado en sensores IMU WT901DCL")
+        title = QLabel("Sistema de Análisis de Marcha Humana"); subtitle = QLabel("Basado en sensores IMU WT901DCL")
         for lbl in [title, subtitle]:
             lbl.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("font-size: 24px; font-weight: bold; color: #6C63FF;")
@@ -981,7 +957,7 @@ class HomeScreen(QWidget):
             btn.setStyleSheet(f"background-color: {color}; color: white; padding: 12px; font-weight: bold; border-radius: 10px;")
             btn.setCursor(QCursor(Qt.PointingHandCursor))
             btn.clicked.connect(lambda checked, x=idx: self.switch_callback(x))
-        footer = QLabel("Desarrollado por Adrián Beltrán, Lalo Varela y Paola ")
+        footer = QLabel("Desarrollado por Adrián Beltrán, Lalo Varela y Paola Guzmán")
         footer.setAlignment(Qt.AlignCenter); footer.setStyleSheet("color: #666666; font-size: 12px;")
         layout = QVBoxLayout()
         layout.addWidget(self.logo); layout.addWidget(title); layout.addWidget(subtitle)
@@ -993,7 +969,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Sistema de Análisis de Marcha - WT901DCL")
-        self.resize(1200, 760)
+        self.resize(1280, 800)
         self.stack = QStackedWidget()
         self.home = HomeScreen(self.switch_to_mode)
         self.modeB = ModeBWidget(self.go_home)
@@ -1012,7 +988,6 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(0)
 
 
-# ---------- Launch ----------
 def main():
     app = QApplication(sys.argv)
     if HAS_QDARK:
