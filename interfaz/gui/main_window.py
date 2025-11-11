@@ -1,8 +1,17 @@
 # interfaz/gui/main_window.py
 """
-Interfaz actualizada: 3 gráficas (Aceleración, Velocidad angular, Ángulos) + tabla + guardado CSV.
-Con parsing WT901 (20 bytes), parse ASCII y parser del repo (si existe).
+Interfaz principal para AVDs con sensores inerciales.
+
+- Modo A: cargar CSV -> preprocesado coherente con el entrenamiento (100 Hz) ->
+          segmentación en ventanas (2.56 s) -> extracción top8 -> predicción por ventana ->
+          graficar y guardar diagnósticos.
+- Modo B: adquisición BLE (o simulación) -> buffer -> guardar CSV crudo.
+- Modo C: realtime -> toma ventana cruda -> remuestrea a 100 Hz -> extrae top8 -> predecir.
+
+Uso:
+    python -m interfaz.gui.main_window
 """
+
 import sys
 import time
 import csv
@@ -957,7 +966,7 @@ class HomeScreen(QWidget):
             btn.setStyleSheet(f"background-color: {color}; color: white; padding: 12px; font-weight: bold; border-radius: 10px;")
             btn.setCursor(QCursor(Qt.PointingHandCursor))
             btn.clicked.connect(lambda checked, x=idx: self.switch_callback(x))
-        footer = QLabel("Desarrollado por Adrián Beltrán, Lalo Varela y Paola Guzmán")
+        footer = QLabel("Desarrollado por Adrián Beltrán, Lalo Varela y Paola Montaño")
         footer.setAlignment(Qt.AlignCenter); footer.setStyleSheet("color: #666666; font-size: 12px;")
         layout = QVBoxLayout()
         layout.addWidget(self.logo); layout.addWidget(title); layout.addWidget(subtitle)
